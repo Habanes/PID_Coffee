@@ -14,13 +14,11 @@
 #include "Display.h"
 #include "Controls.h"
 #include "WebServer.h"
-#include "Buzzer.h"
 
 // --- RTOS TASK HANDLES ---
 TaskHandle_t TaskDisplayHandle;
 TaskHandle_t TaskControlHandle;
 TaskHandle_t TaskWebServerHandle;
-TaskHandle_t TaskBuzzerTestHandle;
 
 // --- TASK: DISPLAY (CORE 0) ---
 // Keeps the 7-segment display alive without flickering.
@@ -68,15 +66,6 @@ void TaskWebServer(void * pvParameters) {
   }
 }
 
-// --- TASK: BUZZER TEST (CORE 0) ---
-// Continuously sweeps through frequencies so the buzzer can be verified.
-// Remove or comment out once the buzzer is confirmed working.
-void TaskBuzzerTest(void * pvParameters) {
-  for(;;) {
-    buzzerIdleJingle(); // Sweeps 200Hz-8kHz, logs each frequency to Serial
-  }
-}
-
 // --- MAIN SETUP ---
 void setup() {
   Serial.begin(115200);
@@ -93,29 +82,20 @@ void setup() {
   // 2. Setup Inputs (Interrupts attach here)
   setupInput();
 
-  // 3. Setup Buzzer and play startup jingle
-  setupBuzzer();
-  buzzerStartupJingle();
-
-  // 4. Create Display Task on CORE 0
+  // 3. Create Display Task on CORE 0
   xTaskCreatePinnedToCore(
     TaskDisplay, "Display", 4096, NULL, 1, &TaskDisplayHandle, 0
   );
 
-  // 5. Create Web Server Task on CORE 0
+  // 4. Create Web Server Task on CORE 0
   xTaskCreatePinnedToCore(
     TaskWebServer, "WebServer", 8192, NULL, 1, &TaskWebServerHandle, 0
   );
 
-  // 6. Create Control Task on CORE 1 (highest priority)
+  // 5. Create Control Task on CORE 1 (highest priority)
   xTaskCreatePinnedToCore(
     TaskControl, "Control", 4096, NULL, 2, &TaskControlHandle, 1
   );
-
-  // 7. Buzzer test task disabled (buzzer verified)
-  // xTaskCreatePinnedToCore(
-  //   TaskBuzzerTest, "BuzzerTest", 2048, NULL, 1, &TaskBuzzerTestHandle, 0
-  // );
 }
 
 // --- MAIN LOOP ---

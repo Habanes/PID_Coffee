@@ -1,6 +1,5 @@
 #include "Input.h"
 #include "State.h"
-#include "Buzzer.h"
 #include "Controls.h"
 #include <RotaryEncoder.h> // Library by Matthias Hertel
 
@@ -73,8 +72,6 @@ void syncInputState() {
       STATE_UNLOCK();
     }
 
-    buzzerRotaryTick(); // Audible click for every detent
-    
     // Update the previous position so we don't print again until it moves
     lastPos = currPos; 
   }
@@ -106,7 +103,6 @@ void syncInputState() {
         Serial.println("ms)");
         
         if (pressDuration < 500 && !longPressTriggered) {
-          buzzerButtonPress(); // Confirm short press
           // SHORT PRESS: Cycle display mode CURRENT → SET → DEBUG(IP) → CURRENT
           STATE_LOCK();
           DisplayMode mode = state.displayMode;
@@ -153,7 +149,6 @@ void syncInputState() {
           STATE_UNLOCK();
           Serial.println("→ Sensitivity: 0.1°C (long press)");
         }
-        buzzerLongPress(); // Confirm sensitivity change
       } else {
         STATE_UNLOCK();
       }
@@ -178,10 +173,8 @@ void syncInputState() {
         setBrewMode(newBrewMode);
 
         if (newBrewMode) {
-          buzzerLongPress();  // Distinctive double-beep for brew ON
           Serial.println("[INPUT] Brew mode: ON");
         } else {
-          buzzerButtonPress(); // Single beep for brew OFF
           Serial.println("[INPUT] Brew mode: OFF");
         }
       }
