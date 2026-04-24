@@ -112,10 +112,10 @@ void setup() {
     TaskControl, "Control", 4096, NULL, 2, &TaskControlHandle, 1
   );
 
-  // 7. Create Buzzer Test Task on CORE 0 (remove once buzzer is verified)
-  xTaskCreatePinnedToCore(
-    TaskBuzzerTest, "BuzzerTest", 2048, NULL, 1, &TaskBuzzerTestHandle, 0
-  );
+  // 7. Buzzer test task disabled (buzzer verified)
+  // xTaskCreatePinnedToCore(
+  //   TaskBuzzerTest, "BuzzerTest", 2048, NULL, 1, &TaskBuzzerTestHandle, 0
+  // );
 }
 
 // --- MAIN LOOP ---

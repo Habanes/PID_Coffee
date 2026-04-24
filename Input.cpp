@@ -10,7 +10,7 @@
 #define PIN_IN1 6  // ROTARY_A
 #define PIN_IN2 5  // ROTARY_B
 #define PIN_BTN 4  // ROTARY_SWITCH
-#define PIN_BREW 0 // GPIO 0 - Brew mode toggle button (boot button, active LOW)
+#define PIN_BREW 2 // GPIO 0 - Brew mode toggle button (boot button, active LOW)
 
 // --- LIBRARY SETUP ---
 // "LatchMode::TWO03" is the most common for standard EC11 encoders.
@@ -38,6 +38,7 @@ void setupInput() {
   pinMode(PIN_BREW, INPUT_PULLUP);
 
   Serial.println("Input setup complete.");
+}
 
 void syncInputState() {
   // --- 1. HANDLE ROTATION ---

@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 #define RELAY_PIN 14
-#define EMERGENCY_STOP_TEMP 150.0  // Maximum safe temperature (°C)
+#define EMERGENCY_STOP_TEMP 100.0  // Maximum safe temperature (°C)
 
 // Default PID Parameters - Heating Mode (Factory Defaults)
 #define DEFAULT_KP 30.0
