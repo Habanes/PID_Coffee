@@ -27,7 +27,7 @@ void TaskDisplay(void * pvParameters) {
 
   for(;;) {
     refreshDisplay(); 
-    vTaskDelay(2 / portTICK_PERIOD_MS); // 2ms cycle
+    vTaskDelay(TASK_DISPLAY_CYCLE_MS / portTICK_PERIOD_MS);
   }
 }
 
@@ -37,7 +37,7 @@ void TaskControl(void * pvParameters) {
   setupSensors();  // Initialize TSIC
   setupControls(); // Initialize Relay/PID
 
-  const TickType_t xFrequency = 100 / portTICK_PERIOD_MS; // 100ms = 10Hz
+  const TickType_t xFrequency = TASK_CONTROL_CYCLE_MS / portTICK_PERIOD_MS;
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   for(;;) {
@@ -62,7 +62,7 @@ void TaskWebServer(void * pvParameters) {
 
   for(;;) {
     handleWebServer();  // Process HTTP requests
-    vTaskDelay(10 / portTICK_PERIOD_MS);  // Small delay
+    vTaskDelay(TASK_WEBSERVER_CYCLE_MS / portTICK_PERIOD_MS);
   }
 }
 
@@ -70,7 +70,7 @@ void TaskWebServer(void * pvParameters) {
 void setup() {
   Serial.begin(115200);
 
-  delay(2000); 
+  delay(STARTUP_DELAY_MS);
   Serial.println("--- SYSTEM STARTING ---");
 
   // 0. Initialize state mutex FIRST (before any tasks access shared state)
@@ -84,17 +84,17 @@ void setup() {
 
   // 3. Create Display Task on CORE 0
   xTaskCreatePinnedToCore(
-    TaskDisplay, "Display", 4096, NULL, 1, &TaskDisplayHandle, 0
+    TaskDisplay, "Display", TASK_DISPLAY_STACK, NULL, TASK_DISPLAY_PRIORITY, &TaskDisplayHandle, 0
   );
 
   // 4. Create Web Server Task on CORE 0
   xTaskCreatePinnedToCore(
-    TaskWebServer, "WebServer", 8192, NULL, 1, &TaskWebServerHandle, 0
+    TaskWebServer, "WebServer", TASK_WEBSERVER_STACK, NULL, TASK_WEBSERVER_PRIORITY, &TaskWebServerHandle, 0
   );
 
   // 5. Create Control Task on CORE 1 (highest priority)
   xTaskCreatePinnedToCore(
-    TaskControl, "Control", 4096, NULL, 2, &TaskControlHandle, 1
+    TaskControl, "Control", TASK_CONTROL_STACK, NULL, TASK_CONTROL_PRIORITY, &TaskControlHandle, 1
   );
 }
 

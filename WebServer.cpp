@@ -108,7 +108,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                     <div class="control-group">
                         <label for="kdInput">Kd (Derivative)</label>
-                        <input type="number" id="kdInput" step="0.1" value="0.0" min="0" max="100">
+                        <input type="number" id="kdInput" step="0.1" value="0.0" min="0" max="2000">
                     </div>
                     <div class="control-group">
                         <label for="targetInput">Target Temperature (°C)</label>
@@ -141,7 +141,7 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                     <div class="control-group">
                         <label for="brewKdInput">Brew Kd (Derivative)</label>
-                        <input type="number" id="brewKdInput" step="0.1" value="8.0" min="0" max="100">
+                        <input type="number" id="brewKdInput" step="0.1" value="8.0" min="0" max="2000">
                     </div>
                     <div class="control-group">
                         <label for="brewBoostInput">Pre-Boost Duration (s)</label>
@@ -496,8 +496,8 @@ function updateBrewStatus(brewMode, boostPhase) {
     const label = document.getElementById('brewStatusLabel');
     if (!badge || !label) return;
     if (brewMode && boostPhase) {
-        badge.textContent = 'BOOST'; badge.className = 'brew-status-indicator boost';
-        label.textContent = 'Pre-heating boost active \u2014 100% heater power';
+        badge.textContent = 'DELAY'; badge.className = 'brew-status-indicator boost';
+        label.textContent = 'Pre-brew delay \u2014 heater off, brew PID pending';
     } else if (brewMode) {
         badge.textContent = 'BREWING'; badge.className = 'brew-status-indicator active';
         label.textContent = 'Brew PID active \u2014 maintaining extraction temperature';
@@ -535,7 +535,7 @@ function applyPIDSettings(btn) {
     if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(target)) { alert('Invalid input'); return; }
     if (kp<0||kp>500) { alert('Kp: 0-500'); return; }
     if (ki<0||ki>50) { alert('Ki: 0-50'); return; }
-    if (kd<0||kd>100) { alert('Kd: 0-100'); return; }
+    if (kd<0||kd>2000) { alert('Kd: 0-2000'); return; }
     if (target<0||target>120) { alert('Temp: 0-120\u00b0C'); return; }
     fetch('/api/setPID', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -581,7 +581,7 @@ function applyBrewSettings(btn) {
     if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(boost)) { alert('Invalid input'); return; }
     if (kp<0||kp>500) { alert('Brew Kp: 0-500'); return; }
     if (ki<0||ki>50) { alert('Brew Ki: 0-50'); return; }
-    if (kd<0||kd>100) { alert('Brew Kd: 0-100'); return; }
+    if (kd<0||kd>2000) { alert('Brew Kd: 0-2000'); return; }
     if (boost<1||boost>30) { alert('Boost: 1-30s'); return; }
     fetch('/api/setBrewSettings', {
         method: 'POST', headers: {'Content-Type':'application/json'},
@@ -658,13 +658,11 @@ void sendResponse(WiFiClient &client, const char* content, const char* contentTy
     client.println("Connection: close");
     client.println();
     
-    // Send PROGMEM content directly
     size_t len = strlen_P(content);
-    const size_t bufferSize = 1024;
-    char buffer[bufferSize];
+    char buffer[WEB_SEND_BUFFER_SIZE];
     
-    for (size_t i = 0; i < len; i += bufferSize) {
-        size_t chunk = min(bufferSize, len - i);
+    for (size_t i = 0; i < len; i += WEB_SEND_BUFFER_SIZE) {
+        size_t chunk = min((size_t)WEB_SEND_BUFFER_SIZE, len - i);
         memcpy_P(buffer, content + i, chunk);
         client.write((uint8_t*)buffer, chunk);
     }
@@ -675,50 +673,25 @@ void sendResponse(WiFiClient &client, const char* content, const char* contentTy
  * Tries to connect to home WiFi first, falls back to AP mode if it fails
  */
 void setupWebServer() {
-    Serial.println("[WEB] Starting WiFi...");
-    
-    // Try to connect to existing WiFi network
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_ssid, wifi_password);
     
-    Serial.print("[WEB] Connecting to WiFi: ");
-    Serial.println(wifi_ssid);
-    
     int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
+    while (WiFi.status() != WL_CONNECTED && attempts < WIFI_CONNECT_ATTEMPTS) {
+        delay(WIFI_CONNECT_DELAY_MS);
         attempts++;
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-        // Successfully connected to WiFi
-        Serial.println("\n[WEB] ========================================");
-        Serial.println("[WEB] WiFi Connected!");
-        Serial.printf("[WEB] SSID: %s\n", wifi_ssid);
-        Serial.printf("[WEB] IP Address: %s\n", WiFi.localIP().toString().c_str());
-        Serial.println("[WEB] ========================================");
-        Serial.printf("[WEB] Navigate to: http://%s\n", WiFi.localIP().toString().c_str());
-        Serial.println("[WEB] ========================================");
+        Serial.printf("[WEB] Connected to %s | http://%s\n", wifi_ssid, WiFi.localIP().toString().c_str());
     } else {
-        // Failed to connect, start AP mode
-        Serial.println("\n[WEB] WiFi connection failed. Starting Access Point...");
         WiFi.mode(WIFI_AP);
         WiFi.softAP(ap_ssid, ap_password);
         delay(100);
-        
-        IPAddress IP = WiFi.softAPIP();
-        Serial.println("[WEB] ========================================");
-        Serial.printf("[WEB] AP Started: %s\n", ap_ssid);
-        Serial.printf("[WEB] Password: %s\n", ap_password);
-        Serial.printf("[WEB] IP Address: %s\n", IP.toString().c_str());
-        Serial.println("[WEB] ========================================");
-        Serial.printf("[WEB] Navigate to: http://%s\n", IP.toString().c_str());
-        Serial.println("[WEB] ========================================");
+        Serial.printf("[WEB] AP mode: %s | http://%s\n", ap_ssid, WiFi.softAPIP().toString().c_str());
     }
     
     server.begin();
-    Serial.println("[WEB] HTTP server started on port 80!");
 }
 
 /**
@@ -741,8 +714,6 @@ void handleWebServer() {
     WiFiClient client = server.available();
     
     if (client) {
-        Serial.println("[WEB] New client connected");
-        
         String requestLine = "";
         String currentLine = "";
         bool isFirstLine = true;
@@ -764,26 +735,23 @@ void handleWebServer() {
                         if (contentLength > 0) {
                             // Wait for body data with timeout
                             unsigned long bodyStart = millis();
-                            while (body.length() < contentLength && (millis() - bodyStart) < 1000) {
+                            while (body.length() < contentLength && (millis() - bodyStart) < WEB_BODY_READ_TIMEOUT_MS) {
                                 if (client.available()) {
                                     body += (char)client.read();
                                 } else {
-                                    delay(1);  // Small delay to wait for data
+                                    vTaskDelay(1 / portTICK_PERIOD_MS);
                                 }
                             }
                         }
                         
                         // Send response based on requested path
                         if (requestLine.indexOf("GET / ") >= 0 || requestLine.indexOf("GET /index.html") >= 0) {
-                            Serial.println("[WEB] Serving index.html");
                             sendResponse(client, index_html, "text/html");
                         }
                         else if (requestLine.indexOf("GET /style.css") >= 0) {
-                            Serial.println("[WEB] Serving style.css");
                             sendResponse(client, style_css, "text/css");
                         }
                         else if (requestLine.indexOf("GET /script.js") >= 0) {
-                            Serial.println("[WEB] Serving script.js");
                             sendResponse(client, script_js, "application/javascript");
                         }
                         else if (requestLine.indexOf("GET /api/data") >= 0) {
@@ -800,7 +768,7 @@ void handleWebServer() {
                             json += "\"currentTemp\":" + String(currentTemp, 1) + ",";
                             json += "\"setTemp\":" + String(setTemp, 1) + ",";
                             json += "\"pidOutput\":" + String(pidOutput, 0) + ",";
-                            json += "\"dutyCycle\":" + String((pidOutput / 10.0), 1) + ",";
+                            json += "\"dutyCycle\":" + String((pidOutput / SSR_WINDOW_MS * 100.0), 1) + ",";
                             json += "\"error\":" + String(isEmergencyStopActive() ? "true" : "false") + ",";
                             json += "\"brewMode\":" + String(brewMode ? "true" : "false") + ",";
                             json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false") + ",";
@@ -824,7 +792,7 @@ void handleWebServer() {
                             
                             String json = "{";
                             json += "\"kp\":" + String(kp, 1) + ",";
-                            json += "\"ki\":" + String(ki, 2) + ",";
+                            json += "\"ki\":" + String(ki, 3) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
                             json += "\"target\":" + String(setTemp, 1);
                             json += "}";
@@ -834,12 +802,10 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
-                            Serial.println("[WEB] Served /api/getPID");
                         }
                         else if (requestLine.indexOf("POST /api/setPID") >= 0) {
                             // Body was already read above after headers
-                            // Parse JSON (simple parsing for our known format)
-                            // Expected: {"kp":75.0,"ki":1.5,"kd":0.0,"target":93.0}
+                            // Expected: {"kp":62.0,"ki":1.19,"kd":713.0,"target":93.0}
                             double kp = 0, ki = 0, kd = 0, target = 0;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
@@ -851,8 +817,6 @@ void handleWebServer() {
                             if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
                             if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
                             
-                            Serial.printf("[WEB] Received body: %s\n", body.c_str());
-                            
                             // Apply settings
                             setPIDTunings(kp, ki, kd);
                             setTargetTemp(target);
@@ -862,7 +826,7 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
+                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
                         }
                         else if (requestLine.indexOf("POST /api/resetPID") >= 0) {
                             // Reset PID to factory defaults
@@ -879,7 +843,7 @@ void handleWebServer() {
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(kp, 1) + ",";
-                            json += "\"ki\":" + String(ki, 2) + ",";
+                            json += "\"ki\":" + String(ki, 3) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
                             json += "\"target\":" + String(setTemp, 1);
                             json += "}";
@@ -902,14 +866,14 @@ void handleWebServer() {
                         }
                         else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
                             double bkp, bki, bkd;
-                            int bboost;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost);
+                            int bdelay;
+                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             String json = "{";
                             json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 2) + ",";
+                            json += "\"ki\":" + String(bki, 3) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bboost);
+                            json += "\"boost\":" + String(bdelay);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -917,11 +881,10 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
-                            Serial.println("[WEB] Served /api/getBrewSettings");
                         }
                         else if (requestLine.indexOf("POST /api/setBrewSettings") >= 0) {
                             double bkp = 0, bki = 0, bkd = 0;
-                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
+                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
                             int kdIdx = body.indexOf("\"kd\":");
@@ -930,33 +893,32 @@ void handleWebServer() {
                             if (kpIdx >= 0) bkp = body.substring(kpIdx + 5).toDouble();
                             if (kiIdx >= 0) bki = body.substring(kiIdx + 5).toDouble();
                             if (kdIdx >= 0) bkd = body.substring(kdIdx + 5).toDouble();
-                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 8).toInt();
+                            if (boostIdx >= 0) bdelay = body.substring(boostIdx + 8).toInt();
                             
-                            setBrewPIDTunings(bkp, bki, bkd, bboost);
+                            setBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Boost=%ds\n",
-                                         bkp, bki, bkd, bboost);
+                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Delay=%ds\n",
+                                         bkp, bki, bkd, bdelay);
                         }
                         else if (requestLine.indexOf("POST /api/resetBrewSettings") >= 0) {
                             resetBrewPIDToDefaults();
                             
                             double bkp, bki, bkd;
-                            int bboost;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost);
+                            int bdelay;
+                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 2) + ",";
+                            json += "\"ki\":" + String(bki, 3) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bboost);
-                            json += "}";
-                            
+                            json += "\"boost\":" + String(bdelay);
+                            json += "}";                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
@@ -988,7 +950,6 @@ void handleWebServer() {
                         if (isFirstLine) {
                             requestLine = currentLine;
                             isFirstLine = false;
-                            Serial.println("[WEB] Request: " + requestLine);
                         }
                         currentLine = "";
                     }
@@ -998,8 +959,7 @@ void handleWebServer() {
             }
         }
         
-        delay(1);
+        vTaskDelay(1 / portTICK_PERIOD_MS);
         client.stop();
-        Serial.println("[WEB] Client disconnected");
     }
 }
