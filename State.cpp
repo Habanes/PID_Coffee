@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include "State.h"
 
 // Global state instance — shared across all modules
