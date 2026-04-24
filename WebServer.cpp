@@ -144,8 +144,8 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <input type="number" id="brewKdInput" step="0.1" value="8.0" min="0" max="100">
                     </div>
                     <div class="control-group">
-                        <label for="brewBoostInput">Pre-Boost Duration (s)</label>
-                        <input type="number" id="brewBoostInput" step="1" value="5" min="1" max="30">
+                        <label for="brewDelayInput">PID Delay After Brew Start (s)</label>
+                        <input type="number" id="brewDelayInput" step="1" value="10" min="0" max="60">
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px;">
@@ -406,10 +406,10 @@ header h1 { font-size: 2em; color: #667eea; }
     color: white;
     animation: pulse 1s infinite;
 }
-.brew-status-indicator.boost {
-    background: #ff4444;
+.brew-status-indicator.delay {
+    background: #6c757d;
     color: white;
-    animation: pulse 0.5s infinite;
+    animation: pulse 1s infinite;
 }
 .brew-status-label {
     color: #888;
@@ -486,7 +486,7 @@ function fetchRealData() {
         currentTemp = data.currentTemp; setTemp = data.setTemp;
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
         dashboardAPI.setRelayError(data.error);
-        updateBrewStatus(data.brewMode, data.brewBoostPhase);
+        updateBrewStatus(data.brewMode, data.brewDelayPhase);
         updateRelayForceBtn(data.relayForceOff);
         updateDashboard();
     }).catch(e => console.error('Fetch error:', e));
@@ -496,8 +496,8 @@ function updateBrewStatus(brewMode, boostPhase) {
     const label = document.getElementById('brewStatusLabel');
     if (!badge || !label) return;
     if (brewMode && boostPhase) {
-        badge.textContent = 'BOOST'; badge.className = 'brew-status-indicator boost';
-        label.textContent = 'Pre-heating boost active \u2014 100% heater power';
+        badge.textContent = 'DELAY'; badge.className = 'brew-status-indicator delay';
+        label.textContent = 'Brew delay active \u2014 heater OFF';
     } else if (brewMode) {
         badge.textContent = 'BREWING'; badge.className = 'brew-status-indicator active';
         label.textContent = 'Brew PID active \u2014 maintaining extraction temperature';
@@ -532,14 +532,16 @@ function applyPIDSettings(btn) {
     const ki = parseFloat(document.getElementById('kiInput').value);
     const kd = parseFloat(document.getElementById('kdInput').value);
     const target = parseFloat(document.getElementById('targetInput').value);
-    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(target)) { alert('Invalid input'); return; }
+    const imax = parseFloat(document.getElementById('imaxInput').value);
+    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(target)||isNaN(imax)) { alert('Invalid input'); return; }
     if (kp<0||kp>500) { alert('Kp: 0-500'); return; }
     if (ki<0||ki>50) { alert('Ki: 0-50'); return; }
     if (kd<0||kd>100) { alert('Kd: 0-100'); return; }
     if (target<0||target>120) { alert('Temp: 0-120\u00b0C'); return; }
+    if (imax<0||imax>1000) { alert('I-Max: 0-1000'); return; }
     fetch('/api/setPID', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp,ki,kd,target})
+        body: JSON.stringify({kp,ki,kd,target,imax})
     }).then(r=>r.json()).then(d=>{
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
@@ -567,6 +569,7 @@ function resetPIDSettings(btn) {
             document.getElementById('kiInput').value = d.ki;
             document.getElementById('kdInput').value = d.kd;
             document.getElementById('targetInput').value = d.target;
+            document.getElementById('imaxInput').value = d.imax;
             const txt = btn.textContent;
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
@@ -577,15 +580,15 @@ function applyBrewSettings(btn) {
     const kp = parseFloat(document.getElementById('brewKpInput').value);
     const ki = parseFloat(document.getElementById('brewKiInput').value);
     const kd = parseFloat(document.getElementById('brewKdInput').value);
-    const boost = parseInt(document.getElementById('brewBoostInput').value);
-    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(boost)) { alert('Invalid input'); return; }
+    const delay = parseInt(document.getElementById('brewDelayInput').value);
+    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(delay)) { alert('Invalid input'); return; }
     if (kp<0||kp>500) { alert('Brew Kp: 0-500'); return; }
     if (ki<0||ki>50) { alert('Brew Ki: 0-50'); return; }
     if (kd<0||kd>100) { alert('Brew Kd: 0-100'); return; }
-    if (boost<1||boost>30) { alert('Boost: 1-30s'); return; }
+    if (delay<0||delay>60) { alert('Delay: 0-60s'); return; }
     fetch('/api/setBrewSettings', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp,ki,kd,boost})
+        body: JSON.stringify({kp,ki,kd,delay})
     }).then(r=>r.json()).then(d=>{
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
@@ -601,7 +604,7 @@ function resetBrewSettings(btn) {
             document.getElementById('brewKpInput').value = d.kp;
             document.getElementById('brewKiInput').value = d.ki;
             document.getElementById('brewKdInput').value = d.kd;
-            document.getElementById('brewBoostInput').value = d.boost;
+            document.getElementById('brewDelayInput').value = d.delay;
             const txt = btn.textContent;
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
@@ -617,6 +620,7 @@ function init() {
         document.getElementById('kiInput').value = d.ki;
         document.getElementById('kdInput').value = d.kd;
         document.getElementById('targetInput').value = d.target;
+        document.getElementById('imaxInput').value = d.imax;
     }).catch(e => console.error('Failed to load PID settings:', e));
 
     // Load current brew settings from ESP32
@@ -624,7 +628,7 @@ function init() {
         document.getElementById('brewKpInput').value = d.kp;
         document.getElementById('brewKiInput').value = d.ki;
         document.getElementById('brewKdInput').value = d.kd;
-        document.getElementById('brewBoostInput').value = d.boost;
+        document.getElementById('brewDelayInput').value = d.delay;
     }).catch(e => console.error('Failed to load brew settings:', e));
     
     fetchRealData(); setInterval(fetchRealData, 1000);
@@ -803,7 +807,7 @@ void handleWebServer() {
                             json += "\"dutyCycle\":" + String((pidOutput / 10.0), 1) + ",";
                             json += "\"error\":" + String(isEmergencyStopActive() ? "true" : "false") + ",";
                             json += "\"brewMode\":" + String(brewMode ? "true" : "false") + ",";
-                            json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false") + ",";
+                            json += "\"brewDelayPhase\":" + String(isBrewDelayPhase() ? "true" : "false") + ",";
                             json += "\"relayForceOff\":" + String(isRelayForceOff() ? "true" : "false");
                             json += "}";
                             
@@ -826,7 +830,8 @@ void handleWebServer() {
                             json += "\"kp\":" + String(kp, 1) + ",";
                             json += "\"ki\":" + String(ki, 2) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
-                            json += "\"target\":" + String(setTemp, 1);
+                            json += "\"target\":" + String(setTemp, 1) + ",";
+                            json += "\"imax\":" + String(getIMax(), 0);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -840,29 +845,32 @@ void handleWebServer() {
                             // Body was already read above after headers
                             // Parse JSON (simple parsing for our known format)
                             // Expected: {"kp":75.0,"ki":1.5,"kd":0.0,"target":93.0}
-                            double kp = 0, ki = 0, kd = 0, target = 0;
+                            double kp = 0, ki = 0, kd = 0, target = 0, imax = DEFAULT_IMAX;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
                             int kdIdx = body.indexOf("\"kd\":");
                             int targetIdx = body.indexOf("\"target\":");
+                            int imaxIdx = body.indexOf("\"imax\":");
                             
                             if (kpIdx >= 0) kp = body.substring(kpIdx + 5).toDouble();
                             if (kiIdx >= 0) ki = body.substring(kiIdx + 5).toDouble();
                             if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
                             if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
+                            if (imaxIdx >= 0) imax = body.substring(imaxIdx + 7).toDouble();
                             
                             Serial.printf("[WEB] Received body: %s\n", body.c_str());
                             
                             // Apply settings
                             setPIDTunings(kp, ki, kd);
                             setTargetTemp(target);
+                            setIMax(imax);
                             
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
+                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Target=%.1f, IMax=%.0f\n", kp, ki, kd, target, imax);
                         }
                         else if (requestLine.indexOf("POST /api/resetPID") >= 0) {
                             // Reset PID to factory defaults
@@ -881,7 +889,8 @@ void handleWebServer() {
                             json += "\"kp\":" + String(kp, 1) + ",";
                             json += "\"ki\":" + String(ki, 2) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
-                            json += "\"target\":" + String(setTemp, 1);
+                            json += "\"target\":" + String(setTemp, 1) + ",";
+                            json += "\"imax\":" + String(getIMax(), 0);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -902,14 +911,14 @@ void handleWebServer() {
                         }
                         else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
                             double bkp, bki, bkd;
-                            int bboost;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost);
+                            int bdelay;
+                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             String json = "{";
                             json += "\"kp\":" + String(bkp, 1) + ",";
                             json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bboost);
+                            json += "\"delay\":" + String(bdelay);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -921,40 +930,40 @@ void handleWebServer() {
                         }
                         else if (requestLine.indexOf("POST /api/setBrewSettings") >= 0) {
                             double bkp = 0, bki = 0, bkd = 0;
-                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
+                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
                             int kdIdx = body.indexOf("\"kd\":");
-                            int boostIdx = body.indexOf("\"boost\":");
+                            int delayIdx = body.indexOf("\"delay\":");
                             
                             if (kpIdx >= 0) bkp = body.substring(kpIdx + 5).toDouble();
                             if (kiIdx >= 0) bki = body.substring(kiIdx + 5).toDouble();
                             if (kdIdx >= 0) bkd = body.substring(kdIdx + 5).toDouble();
-                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 8).toInt();
+                            if (delayIdx >= 0) bdelay = body.substring(delayIdx + 8).toInt();
                             
-                            setBrewPIDTunings(bkp, bki, bkd, bboost);
+                            setBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Boost=%ds\n",
-                                         bkp, bki, bkd, bboost);
+                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Delay=%ds\n",
+                                         bkp, bki, bkd, bdelay);
                         }
                         else if (requestLine.indexOf("POST /api/resetBrewSettings") >= 0) {
                             resetBrewPIDToDefaults();
                             
                             double bkp, bki, bkd;
-                            int bboost;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost);
+                            int bdelay;
+                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
                             
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(bkp, 1) + ",";
                             json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bboost);
+                            json += "\"delay\":" + String(bdelay);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
