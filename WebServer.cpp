@@ -87,6 +87,14 @@ const char index_html[] PROGMEM = R"rawliteral(
         </div>
 
         <div class="card">
+            <div class="card-title">Testing Controls</div>
+            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
+                <button class="btn-relay-override" id="relayForceOffBtn" onclick="toggleRelayForceOff()">Relay: ON (PID controlled)</button>
+                <span style="color:#666; font-size:0.9em;">Force relay OFF to let cold water cool the system without heating.</span>
+            </div>
+        </div>
+
+        <div class="card">
             <div class="card-title">PID Configuration</div>
             <div class="pid-controls">
                 <div class="control-grid">
@@ -107,9 +115,10 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <input type="number" id="targetInput" step="0.5" value="93.0" min="0" max="120">
                     </div>
                 </div>
-                <div style="display: flex; gap: 10px;">
+                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                     <button class="btn-primary" onclick="applyPIDSettings(this)" style="flex: 1;">Apply Settings</button>
                     <button class="btn-reset" onclick="resetPIDSettings(this)" style="flex: 1;">Reset to Defaults</button>
+                    <button class="btn-reset" onclick="resetPIDMemory(this)" style="flex: 1; background: linear-gradient(135deg, #6c757d 0%, #495057 100%);">Reset PID Memory</button>
                 </div>
             </div>
         </div>
@@ -353,6 +362,29 @@ header h1 { font-size: 2em; color: #667eea; }
     transform: translateY(0);
     box-shadow: 0 2px 10px rgba(253, 124, 32, 0.3);
 }
+.btn-relay-override {
+    padding: 15px 30px;
+    background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    font-size: 1.1em;
+    font-weight: bold;
+    cursor: pointer;
+    transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
+    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+}
+.btn-relay-override:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+}
+.btn-relay-override.forced-off {
+    background: linear-gradient(135deg, #dc3545 0%, #b02030 100%);
+    box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4);
+}
+.btn-relay-override.forced-off:hover {
+    box-shadow: 0 6px 20px rgba(220, 53, 69, 0.5);
+}
 .brew-status-row {
     display: flex;
     align-items: center;
@@ -422,7 +454,7 @@ const chart = new Chart(ctx, {
         interaction: { mode: 'nearest', axis: 'x', intersect: false }
     }
 });
-const MAX_DATA_POINTS = 30;
+const MAX_DATA_POINTS = 200;
 function updateDashboard() {
     document.querySelector('#currentTemp .value').textContent = currentTemp.toFixed(1);
     document.querySelector('#setTemp .value').textContent = setTemp.toFixed(1);
@@ -455,6 +487,7 @@ function fetchRealData() {
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
         dashboardAPI.setRelayError(data.error);
         updateBrewStatus(data.brewMode, data.brewBoostPhase);
+        updateRelayForceBtn(data.relayForceOff);
         updateDashboard();
     }).catch(e => console.error('Fetch error:', e));
 }
@@ -472,6 +505,27 @@ function updateBrewStatus(brewMode, boostPhase) {
         badge.textContent = 'INACTIVE'; badge.className = 'brew-status-indicator';
         label.textContent = 'Brew mode off \u2014 press GPIO\u00a00 button to activate';
     }
+}
+function updateRelayForceBtn(forceOff) {
+    const btn = document.getElementById('relayForceOffBtn');
+    if (!btn) return;
+    if (forceOff) {
+        btn.classList.add('forced-off');
+        btn.textContent = 'Relay: FORCED OFF (testing)';
+    } else {
+        btn.classList.remove('forced-off');
+        btn.textContent = 'Relay: ON (PID controlled)';
+    }
+}
+function toggleRelayForceOff() {
+    const btn = document.getElementById('relayForceOffBtn');
+    const currentlyForced = btn.classList.contains('forced-off');
+    fetch('/api/setRelayForce', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({forceOff: !currentlyForced})
+    }).then(r => r.json()).then(d => {
+        updateRelayForceBtn(d.forceOff);
+    }).catch(e => { console.error('Relay force error:', e); alert('Failed to toggle relay'); });
 }
 function applyPIDSettings(btn) {
     const kp = parseFloat(document.getElementById('kpInput').value);
@@ -491,6 +545,17 @@ function applyPIDSettings(btn) {
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
         setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
     }).catch(e => { console.error('Update error:', e); alert('Failed to update PID'); });
+}
+function resetPIDMemory(btn) {
+    fetch('/api/resetPIDMemory', {
+        method: 'POST', headers: {'Content-Type':'application/json'}
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            const txt = btn.textContent;
+            btn.textContent = 'Memory Cleared \u2713';
+            setTimeout(() => { btn.textContent = txt; }, 2000);
+        }
+    }).catch(e => { console.error('PID memory reset error:', e); alert('Failed to reset PID memory'); });
 }
 function resetPIDSettings(btn) {
     if (!confirm('Reset all PID settings to factory defaults?')) return;
@@ -738,7 +803,8 @@ void handleWebServer() {
                             json += "\"dutyCycle\":" + String((pidOutput / 10.0), 1) + ",";
                             json += "\"error\":" + String(isEmergencyStopActive() ? "true" : "false") + ",";
                             json += "\"brewMode\":" + String(brewMode ? "true" : "false") + ",";
-                            json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false");
+                            json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false") + ",";
+                            json += "\"relayForceOff\":" + String(isRelayForceOff() ? "true" : "false");
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -825,6 +891,15 @@ void handleWebServer() {
                             client.println(json);
                             Serial.println("[WEB] PID reset to defaults");
                         }
+                        else if (requestLine.indexOf("POST /api/resetPIDMemory") >= 0) {
+                            resetPIDMemory();
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println("{\"status\":\"ok\"}");
+                            Serial.println("[WEB] PID memory reset (integral zeroed)");
+                        }
                         else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
                             double bkp, bki, bkd;
                             int bboost;
@@ -888,6 +963,19 @@ void handleWebServer() {
                             client.println();
                             client.println(json);
                             Serial.println("[WEB] Brew settings reset to defaults");
+                        }
+                        else if (requestLine.indexOf("POST /api/setRelayForce") >= 0) {
+                            bool forceOff = body.indexOf("\"forceOff\":true") >= 0;
+                            setRelayForceOff(forceOff);
+                            String json = "{\"status\":\"ok\",\"forceOff\":";
+                            json += forceOff ? "true" : "false";
+                            json += "}";
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.printf("[WEB] Relay force-off: %s\n", forceOff ? "true" : "false");
                         }
                         else {
                             Serial.println("[WEB] 404: " + requestLine);

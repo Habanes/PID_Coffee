@@ -1,0 +1,18 @@
+# ignore data directory
+data/*
+
+# ignore PlatformIO build directory
+.pio/*
+
+# ignore configuration files
+**/.vscode
+**/.venv
+**/.idea
+
+# ignore macOS Finder configuration storage files
+**/.DS_Store
+
+platformio_extra.ini
+
+# ignore flash package
+CleverCoffee_Flash_Package

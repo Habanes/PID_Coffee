@@ -17,17 +17,20 @@
 #define DEFAULT_BREW_KP 50.0
 #define DEFAULT_BREW_KI 0.5
 #define DEFAULT_BREW_KD 8.0
-#define DEFAULT_BREW_BOOST_SECONDS 5  // Seconds at 100% duty before brew PID takes over
+#define DEFAULT_BREW_BOOST_SECONDS 20  // Seconds at 100% duty before brew PID takes over
 
 void setupControls();
 void updatePID();
 void emergencyStop();
+void setRelayForceOff(bool forceOff);
+bool isRelayForceOff();
 
 // Heating PID API
 void setPIDTunings(double kp, double ki, double kd);
 void getPIDTunings(double &kp, double &ki, double &kd);
 void setTargetTemp(double temp);
 bool isEmergencyStopActive();
+void resetPIDMemory();  // Zero integral accumulator without changing tunings
 
 // Brew mode API
 void setBrewMode(bool active);

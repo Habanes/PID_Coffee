@@ -41,6 +41,7 @@ hw_timer_t* pidTimer = NULL;
 const unsigned int windowSize = 1000;  // 1000ms = 1 second window
 volatile unsigned int isrCounter = 0;   // Counter increments by 10ms each tick
 volatile bool emergencyStopActive = false;
+volatile bool relayForceOff = false;     // Force relay OFF for testing/cooling
 volatile unsigned long isrTickCount = 0; // Diagnostic: total ISR executions
 
 /**
@@ -56,6 +57,16 @@ void IRAM_ATTR onPIDTimer() {
     
     // Emergency stop overrides everything
     if (emergencyStopActive) {
+        digitalWrite(RELAY_PIN, LOW);
+        isrCounter += 10;
+        if (isrCounter >= windowSize) {
+            isrCounter = 0;
+        }
+        return;
+    }
+    
+    // Force relay off for testing (allows cool-down without PID interference)
+    if (relayForceOff) {
         digitalWrite(RELAY_PIN, LOW);
         isrCounter += 10;
         if (isrCounter >= windowSize) {
@@ -235,20 +246,17 @@ void updatePID() {
     pidInput = currentTemp;
     pidSetpoint = setTemp;
 
+    double error = setTemp - currentTemp;
+
     if (brewModeActive) {
-        // Brew PID: no anti-windup suppression - we need the integral to fight
-        // the continuous heat extraction from cold water flowing through.
+        // Brew PID: integral is needed to fight continuous heat extraction from cold water.
         // Tunings are already set to BrewKp/BrewKi/BrewKd from the transition above.
         myPID.Compute();
     } else {
-        // Heating PID with anti-windup: suppress integral when far from target
-        // to prevent overshoot on initial heat-up.
-        double error = setTemp - currentTemp;
-        if (abs(error) > 4.0) {
-            myPID.SetTunings(Kp, 0.0, Kd);
-        } else {
-            myPID.SetTunings(Kp, Ki, Kd);
-        }
+        // Full PID with integral always active.
+        // PID_v1's built-in output clamping (0..windowSize) prevents true windup:
+        // when output saturates at 0 (above setpoint), accumulation stops naturally.
+        myPID.SetTunings(Kp, Ki, Kd);
         myPID.Compute();
     }
     
@@ -281,6 +289,16 @@ void updatePID() {
     }
 }
 
+void resetPIDMemory() {
+    // Zero the integral accumulator by reinitialising PID with output forced to 0.
+    // PID_v1 sets outputSum = pidOutput on SetMode(AUTOMATIC), so we zero pidOutput first.
+    pidOutput = 0.0;
+    myPID.SetMode(MANUAL);
+    myPID.SetMode(AUTOMATIC);
+    pidOutputISR = 0;
+    Serial.println("[CONTROLS] PID memory reset - integral accumulator zeroed");
+}
+
 void emergencyStop() {
     emergencyStopActive = true;
     pidOutput = 0;       // Force PID output to zero
@@ -296,6 +314,19 @@ void emergencyStop() {
     Serial.println("°C)");
     Serial.println("Heater disabled. Cool down machine before restarting.");
     Serial.println();
+}
+
+void setRelayForceOff(bool forceOff) {
+    relayForceOff = forceOff;
+    if (forceOff) {
+        Serial.println("[CONTROLS] Relay force-off ENABLED - heater suspended for testing");
+    } else {
+        Serial.println("[CONTROLS] Relay force-off DISABLED - resuming PID control");
+    }
+}
+
+bool isRelayForceOff() {
+    return relayForceOff;
 }
 
 // ========== BREW MODE FUNCTIONS ==========

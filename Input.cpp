@@ -107,24 +107,26 @@ void syncInputState() {
         
         if (pressDuration < 500 && !longPressTriggered) {
           buzzerButtonPress(); // Confirm short press
-          // SHORT PRESS: Toggle temperature sensitivity (only in SET mode)
+          // SHORT PRESS: Cycle display mode CURRENT → SET → DEBUG(IP) → CURRENT
           STATE_LOCK();
           DisplayMode mode = state.displayMode;
-          float sensitivity = state.tempSensitivity;
-          
-          if (mode == MODE_SET) {
-            if (sensitivity == 1.0) {
-              state.tempSensitivity = 0.1;
+          switch (mode) {
+            case MODE_CURRENT:
+              state.displayMode = MODE_SET;
               STATE_UNLOCK();
-              Serial.println("→ Sensitivity: 0.1°C");
-            } else {
-              state.tempSensitivity = 1.0;
+              Serial.println("→ Display Mode: SET (short press)");
+              break;
+            case MODE_SET:
+              state.displayMode = MODE_DEBUG;
               STATE_UNLOCK();
-              Serial.println("→ Sensitivity: 1.0°C");
-            }
-          } else {
-            STATE_UNLOCK();
-            Serial.println("→ Sensitivity toggle only available in SET mode");
+              Serial.println("→ Display Mode: IP (short press)");
+              break;
+            case MODE_DEBUG:
+            default:
+              state.displayMode = MODE_CURRENT;
+              STATE_UNLOCK();
+              Serial.println("→ Display Mode: CURRENT (short press)");
+              break;
           }
         }
         // Long press action was already triggered while button was held
@@ -137,27 +139,24 @@ void syncInputState() {
     // Button is still pressed - check for long press threshold
     unsigned long pressDuration = millis() - btnPressTime;
     if (pressDuration >= 500) {
-      // LONG PRESS: Cycle display mode (trigger immediately)
+      // LONG PRESS: Toggle sensitivity in SET mode (0.1 → 1.0, reverse of before)
       STATE_LOCK();
       DisplayMode currentMode = state.displayMode;
-      switch(currentMode) {
-        case MODE_CURRENT:
-          state.displayMode = MODE_SET;
+      if (currentMode == MODE_SET) {
+        float sensitivity = state.tempSensitivity;
+        if (sensitivity == 0.1) {
+          state.tempSensitivity = 1.0;
           STATE_UNLOCK();
-          Serial.println("→ Display Mode: SET (long press)");
-          break;
-        case MODE_SET:
-          state.displayMode = MODE_DEBUG;
+          Serial.println("→ Sensitivity: 1.0°C (long press)");
+        } else {
+          state.tempSensitivity = 0.1;
           STATE_UNLOCK();
-          Serial.println("→ Display Mode: DEBUG (long press)");
-          break;
-        case MODE_DEBUG:
-          state.displayMode = MODE_CURRENT;
-          STATE_UNLOCK();
-          Serial.println("→ Display Mode: CURRENT (long press)");
-          break;
+          Serial.println("→ Sensitivity: 0.1°C (long press)");
+        }
+        buzzerLongPress(); // Confirm sensitivity change
+      } else {
+        STATE_UNLOCK();
       }
-      buzzerLongPress(); // Confirm mode change
       longPressTriggered = true; // Prevent multiple triggers
     }
   }
