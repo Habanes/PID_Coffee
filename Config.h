@@ -97,6 +97,16 @@
 // WEB SERVER
 // =====================================================================
 
+// WiFi credentials (station mode)
+#define WIFI_SSID                   "BabaLan"
+#define WIFI_PASSWORD               "bittegibmirinternet"
+
+// Fallback AP credentials (used when station connect fails)
+#define AP_SSID                     "QuickMill-PID"
+#define AP_PASSWORD                 "espresso123"
+
+#define WEBSERVER_PORT              80      // HTTP server port
+
 #define WIFI_CONNECT_ATTEMPTS       20      // Max attempts before falling back to AP mode
 #define WIFI_CONNECT_DELAY_MS       500     // Delay between connection attempts (ms)
 #define WEB_BODY_READ_TIMEOUT_MS    1000    // Timeout waiting for POST body (ms)
@@ -120,15 +130,20 @@
 #define TASK_WEBSERVER_PRIORITY     1       // FreeRTOS priority for web server task
 
 // =====================================================================
+// PID DEFAULTS — General
+// =====================================================================
+
+#define DEFAULT_IMAX            55.0        // Integrator clamp (max integral contribution, ms)
+#define DEFAULT_EMA_FACTOR      0.6         // EMA smoothing on PID derivative input
+#define DEFAULT_TARGET_TEMP     93.0        // Default setpoint (°C)
+
+// =====================================================================
 // PID DEFAULTS — Heating Mode
 // =====================================================================
 
 #define DEFAULT_KP              62.0
 #define DEFAULT_KI              1.19        // = Kp / Tn  (62.0 / 52.0)
 #define DEFAULT_KD              713.0       // = Tv * Kp  (11.5 * 62.0)
-#define DEFAULT_IMAX            55.0        // Integrator clamp (max integral contribution, ms)
-#define DEFAULT_EMA_FACTOR      0.6         // EMA smoothing on PID derivative input
-#define DEFAULT_TARGET_TEMP     93.0        // Default setpoint (°C)
 
 // =====================================================================
 // PID DEFAULTS — Brew Mode
@@ -137,6 +152,9 @@
 #define DEFAULT_BREW_KP             50.0
 #define DEFAULT_BREW_KI             0.0     // Integral disabled during brew
 #define DEFAULT_BREW_KD             1000.0  // = Tv * Kp  (20.0 * 50.0)
-#define DEFAULT_BREW_DELAY_SECONDS  10      // Seconds heater is off after brew starts
+#define DEFAULT_BREW_BOOST_SECONDS  5       // Seconds heater runs at boost duty cycle after brew starts
+#define DEFAULT_BREW_BOOST_DUTY_CYCLE 100   // % duty cycle during boost window (100 = full on)
+#define DEFAULT_BREW_DELAY_SECONDS  5       // Seconds at delay duty cycle after the boost window
+#define DEFAULT_BREW_DELAY_DUTY_CYCLE 0     // % duty cycle during delay window (0 = full off)
 
 #endif // CONFIG_H

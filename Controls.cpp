@@ -26,12 +26,15 @@ static double emaFactor = DEFAULT_EMA_FACTOR;
 static double BrewKp = DEFAULT_BREW_KP;
 static double BrewKi = DEFAULT_BREW_KI;
 static double BrewKd = DEFAULT_BREW_KD;
+static int brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
 static int brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+static int brewBoostDutyCycle = DEFAULT_BREW_BOOST_DUTY_CYCLE;
+static int brewDelayDutyCycle = DEFAULT_BREW_DELAY_DUTY_CYCLE;
 
-// Brew mode state tracking
-static bool brewModeActive = false;
-static bool brewPidDisabled = false;
-static unsigned long brewStartTime = 0;
+// Brew phase state machine
+enum BrewPhase { BREW_PHASE_NONE, BREW_PHASE_BOOST, BREW_PHASE_DELAY, BREW_PHASE_PID };
+static BrewPhase brewPhase = BREW_PHASE_NONE;
+static unsigned long brewPhaseStartTime = 0;
 
 // PID Controller Instance (8-arg rancilio fork: arg7=pMode 1=P_ON_E, arg8=DIRECT)
 PID myPID(&pidInput, &pidOutput, &pidSetpoint, DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, 1, DIRECT);
@@ -163,49 +166,64 @@ void updatePID() {
         Serial.println("[CONTROLS] Emergency stop cleared - temperature safe");
     }
 
-    // --- BREW MODE TRANSITION LOGIC (matching CleverCoffee) ---
-    if (brewMode && !brewModeActive) {
-        // Brew mode just activated: disable PID for initial delay (no boost, just off)
-        brewModeActive = true;
-        brewPidDisabled = true;
-        brewStartTime = millis();
+    // --- BREW MODE TRANSITION LOGIC ---
+    if (brewMode && brewPhase == BREW_PHASE_NONE) {
+        // Brew mode just activated: start boost phase
+        brewPhase = BREW_PHASE_BOOST;
+        brewPhaseStartTime = millis();
         myPID.SetMode(MANUAL);
-        pidOutput = 0;
-        digitalWrite(RELAY_PIN, LOW);
-        Serial.printf("[CONTROLS] Brew mode ON - PID disabled for %ds delay\n", brewDelaySeconds);
-    } else if (!brewMode && brewModeActive) {
-        // Brew mode deactivated: restore normal heating PID
-        brewModeActive = false;
-        brewPidDisabled = false;
+        pidOutput = (brewBoostDutyCycle / 100.0) * windowSize;
+        pidOutputISR = (uint32_t)pidOutput;
+        Serial.printf("[CONTROLS] Brew mode ON - Boost phase (%ds @ %d%%)\n", brewBoostSeconds, brewBoostDutyCycle);
+    } else if (!brewMode && brewPhase != BREW_PHASE_NONE) {
+        // Brew mode deactivated: restore heating PID immediately regardless of phase
+        brewPhase = BREW_PHASE_NONE;
         myPID.SetMode(AUTOMATIC);
         myPID.SetTunings(Kp, Ki, Kd, 1);
         Serial.println("[CONTROLS] Brew mode OFF - back to heating PID");
     }
 
-    // After brew delay: enable brew PID tunings
-    if (brewModeActive && brewPidDisabled) {
-        if ((millis() - brewStartTime) >= (unsigned long)brewDelaySeconds * 1000UL) {
-            brewPidDisabled = false;
-            myPID.SetMode(AUTOMATIC);
-            myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
-            Serial.println("[CONTROLS] Brew delay elapsed - brew PID active");
+    // --- BREW PHASE ADVANCEMENT ---
+    unsigned long now = millis();
+
+    if (brewPhase == BREW_PHASE_BOOST) {
+        if ((now - brewPhaseStartTime) >= (unsigned long)brewBoostSeconds * 1000UL) {
+            brewPhase = BREW_PHASE_DELAY;
+            brewPhaseStartTime = now;
+            pidOutput = (brewDelayDutyCycle / 100.0) * windowSize;
+            pidOutputISR = (uint32_t)pidOutput;
+            Serial.printf("[CONTROLS] Brew delay phase (%ds @ %d%%)\n", brewDelaySeconds, brewDelayDutyCycle);
+        } else {
+            pidOutput = (brewBoostDutyCycle / 100.0) * windowSize;
+            pidOutputISR = (uint32_t)pidOutput;
+            STATE_LOCK();
+            state.pidOutput = pidOutput;
+            STATE_UNLOCK();
+            return;
         }
     }
 
-    // PID off during brew delay: force output to zero
-    if (brewPidDisabled) {
-        pidOutput = 0;
-        STATE_LOCK();
-        state.pidOutput = 0;
-        STATE_UNLOCK();
-        return;
+    if (brewPhase == BREW_PHASE_DELAY) {
+        if ((now - brewPhaseStartTime) >= (unsigned long)brewDelaySeconds * 1000UL) {
+            brewPhase = BREW_PHASE_PID;
+            myPID.SetMode(AUTOMATIC);
+            myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
+            Serial.println("[CONTROLS] Brew delay elapsed - brew PID active");
+        } else {
+            pidOutput = (brewDelayDutyCycle / 100.0) * windowSize;
+            pidOutputISR = (uint32_t)pidOutput;
+            STATE_LOCK();
+            state.pidOutput = pidOutput;
+            STATE_UNLOCK();
+            return;
+        }
     }
 
     // --- PID COMPUTE ---
     pidInput = currentTemp;
     pidSetpoint = setTemp;
 
-    if (!brewModeActive) {
+    if (brewPhase == BREW_PHASE_NONE) {
         // Normal mode: re-apply heating tunings (allows live tuning updates)
         myPID.SetTunings(Kp, Ki, Kd, 1);
     }
@@ -222,7 +240,10 @@ void updatePID() {
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > CONTROLS_DEBUG_MS) {
         float dutyCycle = (pidOutput / windowSize * 100.0);
-        const char* modeStr = brewModeActive ? "BREW" : "HEAT";
+        const char* modeStr = "HEAT";
+        if (brewPhase == BREW_PHASE_BOOST) modeStr = "BOOST";
+        else if (brewPhase == BREW_PHASE_DELAY) modeStr = "DELAY";
+        else if (brewPhase == BREW_PHASE_PID) modeStr = "BREW";
         Serial.printf("[%s] %.1f°C → %.1f°C | %.1f%% duty\n",
                       modeStr, setTemp, currentTemp, dutyCycle);
         lastDebug = millis();
@@ -278,36 +299,49 @@ bool isBrewModeActive() {
 }
 
 bool isBrewBoostPhase() {
-    return brewModeActive && brewPidDisabled;
+    return brewPhase == BREW_PHASE_BOOST;
 }
 
-void setBrewPIDTunings(double kp, double ki, double kd, int delaySeconds) {
+bool isBrewDelayPhase() {
+    return brewPhase == BREW_PHASE_DELAY;
+}
+
+void setBrewPIDTunings(double kp, double ki, double kd, int boostSeconds, int delaySeconds, int boostDutyCycle, int delayDutyCycle) {
     BrewKp = kp;
     BrewKi = ki;
     BrewKd = kd;
+    brewBoostSeconds = boostSeconds;
     brewDelaySeconds = delaySeconds;
-    // Apply immediately if brew PID is already active (delay has elapsed)
-    if (brewModeActive && !brewPidDisabled) {
+    brewBoostDutyCycle = boostDutyCycle;
+    brewDelayDutyCycle = delayDutyCycle;
+    // Apply immediately if brew PID is already active
+    if (brewPhase == BREW_PHASE_PID) {
         myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
     }
     saveBrewSettingsToStorage();
-    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Delay=%ds\n",
-                  BrewKp, BrewKi, BrewKd, brewDelaySeconds);
+    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Boost=%ds@%d%%, Delay=%ds@%d%%\n",
+                  BrewKp, BrewKi, BrewKd, brewBoostSeconds, brewBoostDutyCycle, brewDelaySeconds, brewDelayDutyCycle);
 }
 
-void getBrewPIDTunings(double &kp, double &ki, double &kd, int &delaySeconds) {
+void getBrewPIDTunings(double &kp, double &ki, double &kd, int &boostSeconds, int &delaySeconds, int &boostDutyCycle, int &delayDutyCycle) {
     kp = BrewKp;
     ki = BrewKi;
     kd = BrewKd;
+    boostSeconds = brewBoostSeconds;
     delaySeconds = brewDelaySeconds;
+    boostDutyCycle = brewBoostDutyCycle;
+    delayDutyCycle = brewDelayDutyCycle;
 }
 
 void resetBrewPIDToDefaults() {
     BrewKp = DEFAULT_BREW_KP;
     BrewKi = DEFAULT_BREW_KI;
     BrewKd = DEFAULT_BREW_KD;
+    brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
     brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
-    if (brewModeActive && !brewPidDisabled) {
+    brewBoostDutyCycle = DEFAULT_BREW_BOOST_DUTY_CYCLE;
+    brewDelayDutyCycle = DEFAULT_BREW_DELAY_DUTY_CYCLE;
+    if (brewPhase == BREW_PHASE_PID) {
         myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
     }
     saveBrewSettingsToStorage();
@@ -319,7 +353,10 @@ void saveBrewSettingsToStorage() {
     preferences.putDouble("brewKp", BrewKp);
     preferences.putDouble("brewKi", BrewKi);
     preferences.putDouble("brewKd", BrewKd);
+    preferences.putInt("brewBoost", brewBoostSeconds);
     preferences.putInt("brewDelay", brewDelaySeconds);
+    preferences.putInt("brewBoostDuty", brewBoostDutyCycle);
+    preferences.putInt("brewDelayDuty", brewDelayDutyCycle);
     preferences.end();
 }
 
@@ -380,11 +417,14 @@ void loadPIDFromStorage() {
     BrewKp = preferences.getDouble("brewKp", DEFAULT_BREW_KP);
     BrewKi = preferences.getDouble("brewKi", DEFAULT_BREW_KI);
     BrewKd = preferences.getDouble("brewKd", DEFAULT_BREW_KD);
+    brewBoostSeconds = preferences.getInt("brewBoost", DEFAULT_BREW_BOOST_SECONDS);
     brewDelaySeconds = preferences.getInt("brewDelay", DEFAULT_BREW_DELAY_SECONDS);
+    brewBoostDutyCycle = preferences.getInt("brewBoostDuty", DEFAULT_BREW_BOOST_DUTY_CYCLE);
+    brewDelayDutyCycle = preferences.getInt("brewDelayDuty", DEFAULT_BREW_DELAY_DUTY_CYCLE);
     
     preferences.end();
-    Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f°C | Brew delay=%ds\n",
-                  Kp, Ki, Kd, state.setTemp, brewDelaySeconds);
+    Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f\u00b0C | Brew boost=%ds@%d%%, delay=%ds@%d%%\n",
+                  Kp, Ki, Kd, state.setTemp, brewBoostSeconds, brewBoostDutyCycle, brewDelaySeconds, brewDelayDutyCycle);
 }
 
 /**

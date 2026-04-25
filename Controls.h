@@ -19,9 +19,10 @@ void resetPIDMemory();  // Zero integral accumulator without changing tunings
 // Brew mode API
 void setBrewMode(bool active);
 bool isBrewModeActive();
-bool isBrewBoostPhase();  // True during the initial brew delay (heater off, PID inactive)
-void setBrewPIDTunings(double kp, double ki, double kd, int delaySeconds);
-void getBrewPIDTunings(double &kp, double &ki, double &kd, int &delaySeconds);
+bool isBrewBoostPhase();  // True during the boost phase (heater at boost duty cycle)
+bool isBrewDelayPhase();  // True during the delay phase (heater at delay duty cycle)
+void setBrewPIDTunings(double kp, double ki, double kd, int boostSeconds, int delaySeconds, int boostDutyCycle, int delayDutyCycle);
+void getBrewPIDTunings(double &kp, double &ki, double &kd, int &boostSeconds, int &delaySeconds, int &boostDutyCycle, int &delayDutyCycle);
 void resetBrewPIDToDefaults();
 void saveBrewSettingsToStorage();
 
