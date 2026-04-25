@@ -8,13 +8,13 @@
 #include "Controls.h"
 #include <WiFi.h>
 
-// WiFi Credentials - Change these to your home WiFi
-const char* wifi_ssid = "BabaLan";      // Replace with your WiFi name
-const char* wifi_password = "bittegibmirinternet"; // Replace with your WiFi password
+// WiFi Credentials
+const char* wifi_ssid     = WIFI_SSID;
+const char* wifi_password = WIFI_PASSWORD;
 
 // Fallback AP mode credentials (if WiFi connection fails)
-const char* ap_ssid = "QuickMill-PID";
-const char* ap_password = "espresso123";
+const char* ap_ssid     = WIFI_AP_SSID;
+const char* ap_password = WIFI_AP_PASSWORD;
 
 // Web Server on port 80
 WiFiServer server(80);
@@ -145,7 +145,11 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                     <div class="control-group">
                         <label for="brewBoostInput">Pre-Boost Duration (s)</label>
-                        <input type="number" id="brewBoostInput" step="1" value="5" min="1" max="30">
+                        <input type="number" id="brewBoostInput" step="1" value="5" min="0" max="30">
+                    </div>
+                    <div class="control-group">
+                        <label for="brewPauseInput">No-Heat Pause After Boost (s)</label>
+                        <input type="number" id="brewPauseInput" step="1" value="0" min="0" max="30">
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px;">
@@ -411,6 +415,11 @@ header h1 { font-size: 2em; color: #667eea; }
     color: white;
     animation: pulse 0.5s infinite;
 }
+.brew-status-indicator.pause {
+    background: #1c7ed6;
+    color: white;
+    animation: pulse 0.8s infinite;
+}
 .brew-status-label {
     color: #888;
     font-size: 0.9em;
@@ -433,27 +442,30 @@ footer {
 
 const char script_js[] PROGMEM = R"rawliteral(
 let currentTemp = 92.5, setTemp = 93.0, pidOutput = 450, dutyCycle = 45.0;
-if (typeof Chart === 'undefined') { console.error('Chart.js not loaded!'); }
-const ctx = document.getElementById('tempChart').getContext('2d');
-const chart = new Chart(ctx, {
-    type: 'line',
-    data: { labels: [], datasets: [{
-        label: 'Current Temp (°C)', data: [], borderColor: '#667eea',
-        backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 3, tension: 0.4, fill: true, pointRadius: 0
-    }, {
-        label: 'Set Temp (°C)', data: [], borderColor: '#ff6b6b',
-        backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], tension: 0, fill: false, pointRadius: 0
-    }]},
-    options: {
-        responsive: true, maintainAspectRatio: true,
-        plugins: { legend: { display: true, position: 'top' }, tooltip: { mode: 'index', intersect: false } },
-        scales: {
-            x: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { maxTicksLimit: 10 } },
-            y: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: v => v+'°C' } }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
-    }
-});
+let chart = null;
+function createChart() {
+    if (typeof Chart === 'undefined') { console.warn('Chart.js not available - chart disabled'); return; }
+    const ctx = document.getElementById('tempChart').getContext('2d');
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: { labels: [], datasets: [{
+            label: 'Current Temp (\u00b0C)', data: [], borderColor: '#667eea',
+            backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 3, tension: 0.4, fill: true, pointRadius: 0
+        }, {
+            label: 'Set Temp (\u00b0C)', data: [], borderColor: '#ff6b6b',
+            backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], tension: 0, fill: false, pointRadius: 0
+        }]},
+        options: {
+            responsive: true, maintainAspectRatio: true,
+            plugins: { legend: { display: true, position: 'top' }, tooltip: { mode: 'index', intersect: false } },
+            scales: {
+                x: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { maxTicksLimit: 10 } },
+                y: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: v => v+'\u00b0C' } }
+            },
+            interaction: { mode: 'nearest', axis: 'x', intersect: false }
+        }
+    });
+}
 const MAX_DATA_POINTS = 200;
 function updateDashboard() {
     document.querySelector('#currentTemp .value').textContent = currentTemp.toFixed(1);
@@ -464,40 +476,45 @@ function updateDashboard() {
     dutyBar.style.width = dutyCycle + '%';
     dutyBar.querySelector('.duty-bar-text').textContent = dutyCycle.toFixed(1) + '%';
     const timestamp = new Date().toLocaleTimeString();
-    chart.data.labels.push(timestamp);
-    chart.data.datasets[0].data.push(currentTemp);
-    chart.data.datasets[1].data.push(setTemp);
-    if (chart.data.labels.length > MAX_DATA_POINTS) {
-        chart.data.labels.shift(); chart.data.datasets[0].data.shift(); chart.data.datasets[1].data.shift();
+    if (chart) {
+        chart.data.labels.push(timestamp);
+        chart.data.datasets[0].data.push(currentTemp);
+        chart.data.datasets[1].data.push(setTemp);
+        if (chart.data.labels.length > MAX_DATA_POINTS) {
+            chart.data.labels.shift(); chart.data.datasets[0].data.shift(); chart.data.datasets[1].data.shift();
+        }
+        if (chart.data.datasets[0].data.length > 0) {
+            const allTemps = [...chart.data.datasets[0].data, ...chart.data.datasets[1].data];
+            const minTemp = Math.min(...allTemps);
+            const maxTemp = Math.max(...allTemps);
+            const range = maxTemp - minTemp;
+            const margin = range * 0.1;
+            chart.options.scales.y.min = Math.floor(minTemp - margin);
+            chart.options.scales.y.max = Math.ceil(maxTemp + margin);
+        }
+        chart.update('none');
     }
-    if (chart.data.datasets[0].data.length > 0) {
-        const allTemps = [...chart.data.datasets[0].data, ...chart.data.datasets[1].data];
-        const minTemp = Math.min(...allTemps);
-        const maxTemp = Math.max(...allTemps);
-        const range = maxTemp - minTemp;
-        const margin = range * 0.1;
-        chart.options.scales.y.min = Math.floor(minTemp - margin);
-        chart.options.scales.y.max = Math.ceil(maxTemp + margin);
-    }
-    chart.update('none');
 }
 function fetchRealData() {
     fetch('/api/data').then(r => r.json()).then(data => {
         currentTemp = data.currentTemp; setTemp = data.setTemp;
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
         dashboardAPI.setRelayError(data.error);
-        updateBrewStatus(data.brewMode, data.brewBoostPhase);
+        updateBrewStatus(data.brewMode, data.brewBoostPhase, data.brewPausePhase);
         updateRelayForceBtn(data.relayForceOff);
         updateDashboard();
     }).catch(e => console.error('Fetch error:', e));
 }
-function updateBrewStatus(brewMode, boostPhase) {
+function updateBrewStatus(brewMode, boostPhase, pausePhase) {
     const badge = document.getElementById('brewStatusBadge');
     const label = document.getElementById('brewStatusLabel');
     if (!badge || !label) return;
     if (brewMode && boostPhase) {
-        badge.textContent = 'DELAY'; badge.className = 'brew-status-indicator boost';
-        label.textContent = 'Pre-brew delay \u2014 heater off, brew PID pending';
+        badge.textContent = 'BOOST'; badge.className = 'brew-status-indicator boost';
+        label.textContent = 'Pre-heating boost active \u2014 100% heater power';
+    } else if (brewMode && pausePhase) {
+        badge.textContent = 'PAUSE'; badge.className = 'brew-status-indicator pause';
+        label.textContent = 'No-heat pause active \u2014 heater off';
     } else if (brewMode) {
         badge.textContent = 'BREWING'; badge.className = 'brew-status-indicator active';
         label.textContent = 'Brew PID active \u2014 maintaining extraction temperature';
@@ -578,14 +595,16 @@ function applyBrewSettings(btn) {
     const ki = parseFloat(document.getElementById('brewKiInput').value);
     const kd = parseFloat(document.getElementById('brewKdInput').value);
     const boost = parseInt(document.getElementById('brewBoostInput').value);
-    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(boost)) { alert('Invalid input'); return; }
+    const pause = parseInt(document.getElementById('brewPauseInput').value);
+    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(boost)||isNaN(pause)) { alert('Invalid input'); return; }
     if (kp<0||kp>500) { alert('Brew Kp: 0-500'); return; }
     if (ki<0||ki>50) { alert('Brew Ki: 0-50'); return; }
     if (kd<0||kd>2000) { alert('Brew Kd: 0-2000'); return; }
-    if (boost<1||boost>30) { alert('Boost: 1-30s'); return; }
+    if (boost<0||boost>30) { alert('Boost: 0-30s'); return; }
+    if (pause<0||pause>30) { alert('Pause: 0-30s'); return; }
     fetch('/api/setBrewSettings', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp,ki,kd,boost})
+        body: JSON.stringify({kp,ki,kd,boost,pause})
     }).then(r=>r.json()).then(d=>{
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
@@ -602,6 +621,7 @@ function resetBrewSettings(btn) {
             document.getElementById('brewKiInput').value = d.ki;
             document.getElementById('brewKdInput').value = d.kd;
             document.getElementById('brewBoostInput').value = d.boost;
+            document.getElementById('brewPauseInput').value = d.pause;
             const txt = btn.textContent;
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
@@ -610,6 +630,7 @@ function resetBrewSettings(btn) {
 }
 function init() {
     console.log('Dashboard init');
+    createChart();
     
     // Load current heating PID settings from ESP32
     fetch('/api/getPID').then(r=>r.json()).then(d=>{
@@ -625,6 +646,7 @@ function init() {
         document.getElementById('brewKiInput').value = d.ki;
         document.getElementById('brewKdInput').value = d.kd;
         document.getElementById('brewBoostInput').value = d.boost;
+        document.getElementById('brewPauseInput').value = d.pause;
     }).catch(e => console.error('Failed to load brew settings:', e));
     
     fetchRealData(); setInterval(fetchRealData, 1000);
@@ -658,11 +680,13 @@ void sendResponse(WiFiClient &client, const char* content, const char* contentTy
     client.println("Connection: close");
     client.println();
     
+    // Send PROGMEM content directly
     size_t len = strlen_P(content);
-    char buffer[WEB_SEND_BUFFER_SIZE];
+    const size_t bufferSize = 1024;
+    char buffer[bufferSize];
     
-    for (size_t i = 0; i < len; i += WEB_SEND_BUFFER_SIZE) {
-        size_t chunk = min((size_t)WEB_SEND_BUFFER_SIZE, len - i);
+    for (size_t i = 0; i < len; i += bufferSize) {
+        size_t chunk = min(bufferSize, len - i);
         memcpy_P(buffer, content + i, chunk);
         client.write((uint8_t*)buffer, chunk);
     }
@@ -673,25 +697,50 @@ void sendResponse(WiFiClient &client, const char* content, const char* contentTy
  * Tries to connect to home WiFi first, falls back to AP mode if it fails
  */
 void setupWebServer() {
+    Serial.println("[WEB] Starting WiFi...");
+    
+    // Try to connect to existing WiFi network
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_ssid, wifi_password);
     
+    Serial.print("[WEB] Connecting to WiFi: ");
+    Serial.println(wifi_ssid);
+    
     int attempts = 0;
     while (WiFi.status() != WL_CONNECTED && attempts < WIFI_CONNECT_ATTEMPTS) {
-        delay(WIFI_CONNECT_DELAY_MS);
+        vTaskDelay(WIFI_CONNECT_DELAY_MS / portTICK_PERIOD_MS);
+        Serial.print(".");
         attempts++;
     }
     
     if (WiFi.status() == WL_CONNECTED) {
-        Serial.printf("[WEB] Connected to %s | http://%s\n", wifi_ssid, WiFi.localIP().toString().c_str());
+        // Successfully connected to WiFi
+        Serial.println("\n[WEB] ========================================");
+        Serial.println("[WEB] WiFi Connected!");
+        Serial.printf("[WEB] SSID: %s\n", wifi_ssid);
+        Serial.printf("[WEB] IP Address: %s\n", WiFi.localIP().toString().c_str());
+        Serial.println("[WEB] ========================================");
+        Serial.printf("[WEB] Navigate to: http://%s\n", WiFi.localIP().toString().c_str());
+        Serial.println("[WEB] ========================================");
     } else {
+        // Failed to connect, start AP mode
+        Serial.println("\n[WEB] WiFi connection failed. Starting Access Point...");
         WiFi.mode(WIFI_AP);
         WiFi.softAP(ap_ssid, ap_password);
-        delay(100);
-        Serial.printf("[WEB] AP mode: %s | http://%s\n", ap_ssid, WiFi.softAPIP().toString().c_str());
+        vTaskDelay(100 / portTICK_PERIOD_MS);
+        
+        IPAddress IP = WiFi.softAPIP();
+        Serial.println("[WEB] ========================================");
+        Serial.printf("[WEB] AP Started: %s\n", ap_ssid);
+        Serial.printf("[WEB] Password: %s\n", ap_password);
+        Serial.printf("[WEB] IP Address: %s\n", IP.toString().c_str());
+        Serial.println("[WEB] ========================================");
+        Serial.printf("[WEB] Navigate to: http://%s\n", IP.toString().c_str());
+        Serial.println("[WEB] ========================================");
     }
     
     server.begin();
+    Serial.println("[WEB] HTTP server started on port 80!");
 }
 
 /**
@@ -714,6 +763,8 @@ void handleWebServer() {
     WiFiClient client = server.available();
     
     if (client) {
+        Serial.println("[WEB] New client connected");
+        
         String requestLine = "";
         String currentLine = "";
         bool isFirstLine = true;
@@ -739,19 +790,22 @@ void handleWebServer() {
                                 if (client.available()) {
                                     body += (char)client.read();
                                 } else {
-                                    vTaskDelay(1 / portTICK_PERIOD_MS);
+                                    vTaskDelay(1); // Yield while waiting for body data
                                 }
                             }
                         }
                         
                         // Send response based on requested path
                         if (requestLine.indexOf("GET / ") >= 0 || requestLine.indexOf("GET /index.html") >= 0) {
+                            Serial.println("[WEB] Serving index.html");
                             sendResponse(client, index_html, "text/html");
                         }
                         else if (requestLine.indexOf("GET /style.css") >= 0) {
+                            Serial.println("[WEB] Serving style.css");
                             sendResponse(client, style_css, "text/css");
                         }
                         else if (requestLine.indexOf("GET /script.js") >= 0) {
+                            Serial.println("[WEB] Serving script.js");
                             sendResponse(client, script_js, "application/javascript");
                         }
                         else if (requestLine.indexOf("GET /api/data") >= 0) {
@@ -768,10 +822,11 @@ void handleWebServer() {
                             json += "\"currentTemp\":" + String(currentTemp, 1) + ",";
                             json += "\"setTemp\":" + String(setTemp, 1) + ",";
                             json += "\"pidOutput\":" + String(pidOutput, 0) + ",";
-                            json += "\"dutyCycle\":" + String((pidOutput / SSR_WINDOW_MS * 100.0), 1) + ",";
+                            json += "\"dutyCycle\":" + String((pidOutput / 10.0), 1) + ",";
                             json += "\"error\":" + String(isEmergencyStopActive() ? "true" : "false") + ",";
                             json += "\"brewMode\":" + String(brewMode ? "true" : "false") + ",";
                             json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false") + ",";
+                            json += "\"brewPausePhase\":" + String(isBrewPausePhase() ? "true" : "false") + ",";
                             json += "\"relayForceOff\":" + String(isRelayForceOff() ? "true" : "false");
                             json += "}";
                             
@@ -792,7 +847,7 @@ void handleWebServer() {
                             
                             String json = "{";
                             json += "\"kp\":" + String(kp, 1) + ",";
-                            json += "\"ki\":" + String(ki, 3) + ",";
+                            json += "\"ki\":" + String(ki, 2) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
                             json += "\"target\":" + String(setTemp, 1);
                             json += "}";
@@ -802,10 +857,12 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
+                            Serial.println("[WEB] Served /api/getPID");
                         }
                         else if (requestLine.indexOf("POST /api/setPID") >= 0) {
                             // Body was already read above after headers
-                            // Expected: {"kp":62.0,"ki":1.19,"kd":713.0,"target":93.0}
+                            // Parse JSON (simple parsing for our known format)
+                            // Expected: {"kp":75.0,"ki":1.5,"kd":0.0,"target":93.0}
                             double kp = 0, ki = 0, kd = 0, target = 0;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
@@ -817,6 +874,8 @@ void handleWebServer() {
                             if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
                             if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
                             
+                            Serial.printf("[WEB] Received body: %s\n", body.c_str());
+                            
                             // Apply settings
                             setPIDTunings(kp, ki, kd);
                             setTargetTemp(target);
@@ -826,7 +885,7 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
+                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
                         }
                         else if (requestLine.indexOf("POST /api/resetPID") >= 0) {
                             // Reset PID to factory defaults
@@ -843,7 +902,7 @@ void handleWebServer() {
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(kp, 1) + ",";
-                            json += "\"ki\":" + String(ki, 3) + ",";
+                            json += "\"ki\":" + String(ki, 2) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
                             json += "\"target\":" + String(setTemp, 1);
                             json += "}";
@@ -866,14 +925,15 @@ void handleWebServer() {
                         }
                         else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
                             double bkp, bki, bkd;
-                            int bdelay;
-                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            int bboost, bpause;
+                            getBrewPIDTunings(bkp, bki, bkd, bboost, bpause);
                             
                             String json = "{";
                             json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 3) + ",";
+                            json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bdelay);
+                            json += "\"boost\":" + String(bboost) + ",";
+                            json += "\"pause\":" + String(bpause);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -881,44 +941,50 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
+                            Serial.println("[WEB] Served /api/getBrewSettings");
                         }
                         else if (requestLine.indexOf("POST /api/setBrewSettings") >= 0) {
                             double bkp = 0, bki = 0, bkd = 0;
-                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
+                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
+                            int bpause = DEFAULT_BREW_PAUSE_SECONDS;
                             int kpIdx = body.indexOf("\"kp\":");
                             int kiIdx = body.indexOf("\"ki\":");
                             int kdIdx = body.indexOf("\"kd\":");
                             int boostIdx = body.indexOf("\"boost\":");
+                            int pauseIdx = body.indexOf("\"pause\":");
                             
                             if (kpIdx >= 0) bkp = body.substring(kpIdx + 5).toDouble();
                             if (kiIdx >= 0) bki = body.substring(kiIdx + 5).toDouble();
                             if (kdIdx >= 0) bkd = body.substring(kdIdx + 5).toDouble();
-                            if (boostIdx >= 0) bdelay = body.substring(boostIdx + 8).toInt();
+                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 8).toInt();
+                            if (pauseIdx >= 0) bpause = body.substring(pauseIdx + 8).toInt();
                             
-                            setBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            setBrewPIDTunings(bkp, bki, bkd, bboost, bpause);
                             
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Delay=%ds\n",
-                                         bkp, bki, bkd, bdelay);
+                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Boost=%ds, Pause=%ds\n",
+                                         bkp, bki, bkd, bboost, bpause);
                         }
                         else if (requestLine.indexOf("POST /api/resetBrewSettings") >= 0) {
                             resetBrewPIDToDefaults();
                             
                             double bkp, bki, bkd;
-                            int bdelay;
-                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            int bboost, bpause;
+                            getBrewPIDTunings(bkp, bki, bkd, bboost, bpause);
                             
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 3) + ",";
+                            json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boost\":" + String(bdelay);
-                            json += "}";                            
+                            json += "\"boost\":" + String(bboost) + ",";
+                            json += "\"pause\":" + String(bpause);
+                            json += "}";
+                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
@@ -950,16 +1016,20 @@ void handleWebServer() {
                         if (isFirstLine) {
                             requestLine = currentLine;
                             isFirstLine = false;
+                            Serial.println("[WEB] Request: " + requestLine);
                         }
                         currentLine = "";
                     }
                 } else if (c != '\r') {
                     currentLine += c;
                 }
+            } else {
+                vTaskDelay(1); // Yield to other tasks when no data available
             }
         }
         
-        vTaskDelay(1 / portTICK_PERIOD_MS);
+        vTaskDelay(1);
         client.stop();
+        Serial.println("[WEB] Client disconnected");
     }
 }

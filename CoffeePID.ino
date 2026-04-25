@@ -70,7 +70,7 @@ void TaskWebServer(void * pvParameters) {
 void setup() {
   Serial.begin(115200);
 
-  delay(STARTUP_DELAY_MS);
+  vTaskDelay(STARTUP_DELAY_MS / portTICK_PERIOD_MS);
   Serial.println("--- SYSTEM STARTING ---");
 
   // 0. Initialize state mutex FIRST (before any tasks access shared state)

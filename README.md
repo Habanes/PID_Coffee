@@ -44,6 +44,5 @@ Download as ZIP and install via **Sketch → Include Library → Add .ZIP Librar
 | Rotary encoder B | 5 |
 | Rotary button | 4 |
 | Brew button | 2 |
-| Buzzer (reserved) | 47 |
 | Display digit 1–4 | 3, 11, 12, 8 |
 | Display segments A–DP | 9, 13, 17, 15, 7, 10, 18, 16 |

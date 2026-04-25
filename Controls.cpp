@@ -11,37 +11,38 @@ double pidInput = 0.0;      // Current temperature
 double pidOutput = 0.0;     // PID output (0-1000ms) - for PID library
 double pidSetpoint = DEFAULT_TARGET_TEMP;  // Target temperature
 
-// Atomic 32-bit copy for ISR (double is 8 bytes and not atomically readable;
-// uint32_t is atomically R/W on ESP32's 32-bit Xtensa core)
-volatile uint32_t pidOutputISR = 0;
+// Volatile copy for ISR (PID library doesn't support volatile pointers)
+volatile double pidOutputISR = 0.0;
 
-// PID Tuning Parameters - Heating Mode
+// PID Tuning Parameters - Heating Mode (loaded from storage or defaults)
 static double Kp = DEFAULT_KP;
 static double Ki = DEFAULT_KI;
 static double Kd = DEFAULT_KD;
-static double IMax = DEFAULT_IMAX;
-static double emaFactor = DEFAULT_EMA_FACTOR;
 
 // PID Tuning Parameters - Brew Mode
 static double BrewKp = DEFAULT_BREW_KP;
 static double BrewKi = DEFAULT_BREW_KI;
 static double BrewKd = DEFAULT_BREW_KD;
-static int brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+static int brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
 
-// Brew mode state tracking
-static bool brewModeActive = false;
-static bool brewPidDisabled = false;
-static unsigned long brewStartTime = 0;
+// Brew mode state tracking (managed inside updatePID)
+static bool brewModeActive = false;   // Mirrors state.brewMode but transitions safely
+static bool brewBoostPhase = false;   // True during the initial 100% duty boost
+static unsigned long brewBoostStartTime = 0;
+static bool brewPausePhase = false;   // True during the no-heat pause window after boost
+static unsigned long brewPauseStartTime = 0;
+static int brewPauseSeconds = DEFAULT_BREW_PAUSE_SECONDS;
 
-// PID Controller Instance (8-arg rancilio fork: arg7=pMode 1=P_ON_E, arg8=DIRECT)
-PID myPID(&pidInput, &pidOutput, &pidSetpoint, DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, 1, DIRECT);
+// PID Controller Instance
+// Parameters: Input, Output, Setpoint, Kp, Ki, Kd, Direction
+PID myPID(&pidInput, &pidOutput, &pidSetpoint, Kp, Ki, Kd, DIRECT);
 
 // Hardware Timer for SSR Control
 hw_timer_t* pidTimer = NULL;
 
-// ISR Variables
-const unsigned int windowSize = SSR_WINDOW_MS;  // Time-proportional window
-volatile unsigned int isrCounter = 0;            // Counter increments by PID_TIMER_INTERVAL_MS each tick
+// ISR Variables (1-second window, 100Hz update rate)
+const unsigned int windowSize = 1000;  // 1000ms = 1 second window
+volatile unsigned int isrCounter = 0;   // Counter increments by 10ms each tick
 volatile bool emergencyStopActive = false;
 volatile bool relayForceOff = false;     // Force relay OFF for testing/cooling
 volatile unsigned long isrTickCount = 0; // Diagnostic: total ISR executions
@@ -60,7 +61,7 @@ void IRAM_ATTR onPIDTimer() {
     // Emergency stop overrides everything
     if (emergencyStopActive) {
         digitalWrite(RELAY_PIN, LOW);
-        isrCounter += PID_TIMER_INTERVAL_MS;
+        isrCounter += 10;
         if (isrCounter >= windowSize) {
             isrCounter = 0;
         }
@@ -70,23 +71,23 @@ void IRAM_ATTR onPIDTimer() {
     // Force relay off for testing (allows cool-down without PID interference)
     if (relayForceOff) {
         digitalWrite(RELAY_PIN, LOW);
-        isrCounter += PID_TIMER_INTERVAL_MS;
+        isrCounter += 10;
         if (isrCounter >= windowSize) {
             isrCounter = 0;
         }
         return;
     }
     
-    // Time-proportional control (read atomic 32-bit copy, not the 8-byte double)
-    if (isrCounter >= pidOutputISR) {
+    // Time-proportional control (use volatile ISR copy)
+    if (pidOutputISR <= isrCounter) {
         digitalWrite(RELAY_PIN, LOW);  // Turn SSR OFF
     } else {
         digitalWrite(RELAY_PIN, HIGH); // Turn SSR ON
     }
     
-    isrCounter += PID_TIMER_INTERVAL_MS;
+    isrCounter += 10;  // Increment by 10ms
     
-    // Reset counter every SSR_WINDOW_MS
+    // Reset counter every 1000ms (1 second window)
     if (isrCounter >= windowSize) {
         isrCounter = 0;
     }
@@ -96,32 +97,59 @@ void setupControls() {
     // Setup Relay Pin
     pinMode(RELAY_PIN, OUTPUT);
     digitalWrite(RELAY_PIN, LOW);
+    Serial.print("[CONTROLS] Relay pin ");
+    Serial.print(RELAY_PIN);
+    Serial.println(" initialized to LOW");
+    
+    // NOTE: PID settings already loaded from storage in main setup()
     
     // Configure PID Controller
     pidSetpoint = state.setTemp;  // Already loaded from storage
-    myPID.SetSampleTime(windowSize);
-    myPID.SetOutputLimits(0, windowSize);
-    myPID.SetIntegratorLimits(0, IMax);
-    myPID.SetSmoothingFactor(emaFactor);
-    myPID.SetMode(AUTOMATIC);
-    myPID.SetTunings(Kp, Ki, Kd, 1);
+    myPID.SetOutputLimits(0, windowSize);  // Output range: 0-1000ms
+    myPID.SetSampleTime(100);              // Calculate every 100ms (10Hz)
+    myPID.SetMode(AUTOMATIC);              // Enable PID controller
+    myPID.SetTunings(Kp, Ki, Kd);          // Apply loaded tunings
     
-    // Setup Hardware Timer (1MHz base, 100Hz alarm)
-    pidTimer = timerBegin(1000000);
+    // Optional: Set derivative smoothing (EMA filter on derivative term)
+    // This reduces noise on the D-term without filtering the main temperature input
+    // Note: This requires a modified PID library that supports SetSmoothingFactor
+    // If your library doesn't support it, comment out the next line
+    // myPID.SetSmoothingFactor(0.6);
+    
+    Serial.println("[CONTROLS] PID configured:");
+    Serial.print("  Kp = "); Serial.println(Kp, 1);
+    Serial.print("  Ki = "); Serial.println(Ki, 2);
+    Serial.print("  Kd = "); Serial.println(Kd, 1);
+    Serial.print("  Sample Time = 100ms (10Hz)");
+    Serial.println();
+    Serial.print("  SSR Window = 1000ms (1Hz)");
+    Serial.println();
+    
+    // Setup Hardware Timer (ESP32 Arduino Core 3.x API)
+    // Timer at 100Hz (every 10ms) for SSR control
+    Serial.println("[CONTROLS] Initializing hardware timer...");
+    
+    // Create timer with 1MHz base frequency (default ESP32 timer clock / 80)
+    pidTimer = timerBegin(1000000);  // 1MHz timer base frequency
     if (pidTimer == NULL) {
         Serial.println("[CONTROLS] ERROR: Failed to create timer!");
         return;
     }
-    timerAttachInterrupt(pidTimer, &onPIDTimer);
-    timerAlarm(pidTimer, PID_TIMER_INTERVAL_MS * 1000UL, true, 0);
+    
+    timerAttachInterrupt(pidTimer, &onPIDTimer);  // Attach ISR callback
+    timerAlarm(pidTimer, 10000, true, 0);  // Alarm every 10000 us (10ms), auto-repeat
+    
+    Serial.println("[CONTROLS] Hardware timer configured");
     
     // Verify timer is ticking
     vTaskDelay(100 / portTICK_PERIOD_MS);
     if (isrTickCount > 0) {
-        Serial.printf("[CONTROLS] Ready | Kp=%.1f Ki=%.3f Kd=%.1f | Setpoint=%.1f°C\n", Kp, Ki, Kd, pidSetpoint);
+        Serial.printf("[CONTROLS] Timer verified! ISR running at ~%lu Hz\n", isrTickCount * 10);
     } else {
         Serial.println("[CONTROLS] WARNING: Timer ISR not executing!");
     }
+    
+    Serial.println("[CONTROLS] Control system ready!");
 }
 
 void updatePID() {
@@ -130,13 +158,17 @@ void updatePID() {
     bool sensorErr = state.sensorError;
     float currentTemp = state.currentTemp;
     float setTemp = state.setTemp;
+    int sensorFailures = state.consecutiveSensorFailures;
     bool brewMode = state.brewMode;
     STATE_UNLOCK();
     
     // CRITICAL SAFETY CHECK #1: Sensor Error
     if (sensorErr) {
         if (!emergencyStopActive) {
-            emergencyStop();
+            emergencyStopActive = true;
+            pidOutput = 0;
+            pidOutputISR = 0;
+            digitalWrite(RELAY_PIN, LOW);
             Serial.println("[CONTROLS] !!! EMERGENCY STOP: Sensor error detected !!!");
         }
         STATE_LOCK();
@@ -146,7 +178,7 @@ void updatePID() {
     }
     
     // CRITICAL SAFETY CHECK #2: Temperature out of plausible range
-    if (currentTemp < TEMP_MIN_VALID || currentTemp > EMERGENCY_STOP_TEMP) {
+    if (currentTemp < 5.0 || currentTemp > EMERGENCY_STOP_TEMP) {
         if (!emergencyStopActive) {
             emergencyStop();
             Serial.printf("[CONTROLS] !!! EMERGENCY STOP: Implausible temperature %.1f\u00b0C !!!\n", currentTemp);
@@ -158,60 +190,118 @@ void updatePID() {
     }
     
     // Clear emergency stop if temperature is back to safe range
-    if (emergencyStopActive && currentTemp < (setTemp + EMERGENCY_STOP_HYSTERESIS)) {
+    if (emergencyStopActive && currentTemp < (setTemp + 5.0)) {
         emergencyStopActive = false;
         Serial.println("[CONTROLS] Emergency stop cleared - temperature safe");
     }
 
-    // --- BREW MODE TRANSITION LOGIC (matching CleverCoffee) ---
+    // --- BREW MODE TRANSITION LOGIC ---
     if (brewMode && !brewModeActive) {
-        // Brew mode just activated: disable PID for initial delay (no boost, just off)
+        // Brew mode just activated: start 100% boost phase
         brewModeActive = true;
-        brewPidDisabled = true;
-        brewStartTime = millis();
+        brewBoostPhase = true;
+        brewBoostStartTime = millis();
+        // Bumpless transfer: initialise PID output at 100% before switching to AUTOMATIC
         myPID.SetMode(MANUAL);
-        pidOutput = 0;
-        digitalWrite(RELAY_PIN, LOW);
-        Serial.printf("[CONTROLS] Brew mode ON - PID disabled for %ds delay\n", brewDelaySeconds);
-    } else if (!brewMode && brewModeActive) {
-        // Brew mode deactivated: restore normal heating PID
-        brewModeActive = false;
-        brewPidDisabled = false;
+        pidOutput = windowSize;
         myPID.SetMode(AUTOMATIC);
-        myPID.SetTunings(Kp, Ki, Kd, 1);
+        Serial.printf("[CONTROLS] Brew mode ON - boost phase started (100%% for %ds)\n", brewBoostSeconds);
+    } else if (!brewMode && brewModeActive) {
+        // Brew mode deactivated: switch back to normal heating PID
+        brewModeActive = false;
+        brewBoostPhase = false;
+        brewPausePhase = false;
+        myPID.SetMode(MANUAL);
+        myPID.SetMode(AUTOMATIC);
+        myPID.SetTunings(Kp, Ki, Kd);
         Serial.println("[CONTROLS] Brew mode OFF - back to heating PID");
     }
 
-    // After brew delay: enable brew PID tunings
-    if (brewModeActive && brewPidDisabled) {
-        if ((millis() - brewStartTime) >= (unsigned long)brewDelaySeconds * 1000UL) {
-            brewPidDisabled = false;
-            myPID.SetMode(AUTOMATIC);
-            myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
-            Serial.println("[CONTROLS] Brew delay elapsed - brew PID active");
+    // Check if boost phase has elapsed
+    if (brewModeActive && brewBoostPhase) {
+        if (millis() - brewBoostStartTime >= (unsigned long)brewBoostSeconds * 1000UL) {
+            brewBoostPhase = false;
+            if (brewPauseSeconds > 0) {
+                // Enter the no-heat pause window
+                brewPausePhase = true;
+                brewPauseStartTime = millis();
+                Serial.printf("[CONTROLS] Brew boost complete - no-heat pause started (%ds)\n", brewPauseSeconds);
+            } else {
+                // No pause configured: go directly to brew PID
+                myPID.SetMode(MANUAL);
+                myPID.SetMode(AUTOMATIC);
+                myPID.SetTunings(BrewKp, BrewKi, BrewKd);
+                Serial.println("[CONTROLS] Brew boost complete - switched to brew PID");
+            }
         }
     }
 
-    // PID off during brew delay: force output to zero
-    if (brewPidDisabled) {
-        pidOutput = 0;
+    // Check if pause phase has elapsed
+    if (brewModeActive && brewPausePhase) {
+        if (millis() - brewPauseStartTime >= (unsigned long)brewPauseSeconds * 1000UL) {
+            brewPausePhase = false;
+            // Bumpless transfer into brew PID
+            myPID.SetMode(MANUAL);
+            myPID.SetMode(AUTOMATIC);
+            myPID.SetTunings(BrewKp, BrewKi, BrewKd);
+            Serial.println("[CONTROLS] Brew pause complete - switched to brew PID");
+        }
+    }
+
+    // During boost phase: force 100% and skip PID compute
+    if (brewModeActive && brewBoostPhase) {
+        pidOutput = windowSize;
+        pidOutputISR = windowSize;
         STATE_LOCK();
-        state.pidOutput = 0;
+        state.pidOutput = windowSize;
         STATE_UNLOCK();
+        static unsigned long lastBoostDebug = 0;
+        if (millis() - lastBoostDebug > 1000) {
+            unsigned long elapsed = (millis() - brewBoostStartTime) / 1000;
+            Serial.printf("[BREW BOOST] %lus/%ds | Temp: %.1f\u00b0C | Heater: 100%%\n",
+                         elapsed, brewBoostSeconds, currentTemp);
+            lastBoostDebug = millis();
+        }
         return;
     }
 
-    // --- PID COMPUTE ---
+    // During pause phase: force 0% and skip PID compute
+    if (brewModeActive && brewPausePhase) {
+        pidOutput = 0;
+        pidOutputISR = 0;
+        STATE_LOCK();
+        state.pidOutput = 0;
+        STATE_UNLOCK();
+        static unsigned long lastPauseDebug = 0;
+        if (millis() - lastPauseDebug > 1000) {
+            unsigned long elapsed = (millis() - brewPauseStartTime) / 1000;
+            Serial.printf("[BREW PAUSE] %lus/%ds | Temp: %.1f\u00b0C | Heater: 0%%\n",
+                         elapsed, brewPauseSeconds, currentTemp);
+            lastPauseDebug = millis();
+        }
+        return;
+    }
+
+    // --- NORMAL / BREW PID COMPUTE ---
     pidInput = currentTemp;
     pidSetpoint = setTemp;
 
-    if (!brewModeActive) {
-        // Normal mode: re-apply heating tunings (allows live tuning updates)
-        myPID.SetTunings(Kp, Ki, Kd, 1);
-    }
+    double error = setTemp - currentTemp;
 
-    myPID.Compute();
-    pidOutputISR = (uint32_t)pidOutput;  // Atomic 32-bit copy for ISR
+    if (brewModeActive) {
+        // Brew PID: integral is needed to fight continuous heat extraction from cold water.
+        // Tunings are already set to BrewKp/BrewKi/BrewKd from the transition above.
+        myPID.Compute();
+    } else {
+        // Full PID with integral always active.
+        // PID_v1's built-in output clamping (0..windowSize) prevents true windup:
+        // when output saturates at 0 (above setpoint), accumulation stops naturally.
+        myPID.SetTunings(Kp, Ki, Kd);
+        myPID.Compute();
+    }
+    
+    // Copy to volatile ISR variable (atomic update for ISR to read)
+    pidOutputISR = pidOutput;
     
     // Store output in global state for display/debugging (thread-safe)
     STATE_LOCK();
@@ -220,11 +310,21 @@ void updatePID() {
     
     // Console output every 1 second
     static unsigned long lastDebug = 0;
-    if (millis() - lastDebug > CONTROLS_DEBUG_MS) {
-        float dutyCycle = (pidOutput / windowSize * 100.0);
+    if (millis() - lastDebug > 1000) {
+        float dutyCycle = (pidOutput / 10.0);
         const char* modeStr = brewModeActive ? "BREW" : "HEAT";
-        Serial.printf("[%s] %.1f°C → %.1f°C | %.1f%% duty\n",
-                      modeStr, setTemp, currentTemp, dutyCycle);
+        Serial.printf("[%s] SetTemp: %.1f\u00b0C | Temp: %.1f\u00b0C | PID: %.0f | Duty: %.1f%%",
+                      modeStr, setTemp, currentTemp, pidOutput, dutyCycle);
+        if (sensorFailures > 0) {
+            Serial.printf(" [WARN: %d sensor failures]", sensorFailures);
+        }
+        static unsigned long lastIsrCount = 0;
+        unsigned long currentIsrCount = isrTickCount;
+        int relayState = digitalRead(RELAY_PIN);
+        Serial.printf(" [ISR: %lu ticks/s, Relay: %s]",
+                     (currentIsrCount - lastIsrCount), relayState ? "ON" : "OFF");
+        lastIsrCount = currentIsrCount;
+        Serial.println();
         lastDebug = millis();
     }
 }
@@ -235,18 +335,25 @@ void resetPIDMemory() {
     pidOutput = 0.0;
     myPID.SetMode(MANUAL);
     myPID.SetMode(AUTOMATIC);
+    pidOutputISR = 0;
+    Serial.println("[CONTROLS] PID memory reset - integral accumulator zeroed");
 }
 
 void emergencyStop() {
     emergencyStopActive = true;
-    pidOutput = 0;
-    digitalWrite(RELAY_PIN, LOW);
-
-    STATE_LOCK();
-    float currentTemp = state.currentTemp;
-    STATE_UNLOCK();
-
-    Serial.printf("\n!!! EMERGENCY STOP: %.1f°C (limit %.1f°C) !!!\n", currentTemp, (float)EMERGENCY_STOP_TEMP);
+    pidOutput = 0;       // Force PID output to zero
+    pidOutputISR = 0;    // Update ISR copy
+    digitalWrite(RELAY_PIN, LOW);  // Ensure relay is OFF
+    
+    Serial.println();
+    Serial.println("!!! EMERGENCY STOP ACTIVATED !!!");
+    Serial.print("Temperature exceeded safe limit: ");
+    Serial.print(state.currentTemp, 1);
+    Serial.print("°C (limit: ");
+    Serial.print(EMERGENCY_STOP_TEMP, 1);
+    Serial.println("°C)");
+    Serial.println("Heater disabled. Cool down machine before restarting.");
+    Serial.println();
 }
 
 void setRelayForceOff(bool forceOff) {
@@ -268,6 +375,7 @@ void setBrewMode(bool active) {
     STATE_LOCK();
     state.brewMode = active;
     STATE_UNLOCK();
+    Serial.printf("[CONTROLS] Brew mode %s\n", active ? "ACTIVATED" : "DEACTIVATED");
 }
 
 bool isBrewModeActive() {
@@ -278,37 +386,44 @@ bool isBrewModeActive() {
 }
 
 bool isBrewBoostPhase() {
-    return brewModeActive && brewPidDisabled;
+    return brewBoostPhase;
 }
 
-void setBrewPIDTunings(double kp, double ki, double kd, int delaySeconds) {
+bool isBrewPausePhase() {
+    return brewPausePhase;
+}
+
+void setBrewPIDTunings(double kp, double ki, double kd, int boostSeconds, int pauseSeconds) {
     BrewKp = kp;
     BrewKi = ki;
     BrewKd = kd;
-    brewDelaySeconds = delaySeconds;
-    // Apply immediately if brew PID is already active (delay has elapsed)
-    if (brewModeActive && !brewPidDisabled) {
-        myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
+    brewBoostSeconds = boostSeconds;
+    brewPauseSeconds = pauseSeconds;
+    // Apply immediately if we are currently in the brew PID phase (not boost/pause)
+    if (brewModeActive && !brewBoostPhase && !brewPausePhase) {
+        myPID.SetTunings(BrewKp, BrewKi, BrewKd);
     }
     saveBrewSettingsToStorage();
-    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Delay=%ds\n",
-                  BrewKp, BrewKi, BrewKd, brewDelaySeconds);
+    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Boost=%ds, Pause=%ds\n",
+                  BrewKp, BrewKi, BrewKd, brewBoostSeconds, brewPauseSeconds);
 }
 
-void getBrewPIDTunings(double &kp, double &ki, double &kd, int &delaySeconds) {
+void getBrewPIDTunings(double &kp, double &ki, double &kd, int &boostSeconds, int &pauseSeconds) {
     kp = BrewKp;
     ki = BrewKi;
     kd = BrewKd;
-    delaySeconds = brewDelaySeconds;
+    boostSeconds = brewBoostSeconds;
+    pauseSeconds = brewPauseSeconds;
 }
 
 void resetBrewPIDToDefaults() {
     BrewKp = DEFAULT_BREW_KP;
     BrewKi = DEFAULT_BREW_KI;
     BrewKd = DEFAULT_BREW_KD;
-    brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
-    if (brewModeActive && !brewPidDisabled) {
-        myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
+    brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
+    brewPauseSeconds = DEFAULT_BREW_PAUSE_SECONDS;
+    if (brewModeActive && !brewBoostPhase && !brewPausePhase) {
+        myPID.SetTunings(BrewKp, BrewKi, BrewKd);
     }
     saveBrewSettingsToStorage();
     Serial.println("[CONTROLS] Brew PID reset to factory defaults");
@@ -319,8 +434,10 @@ void saveBrewSettingsToStorage() {
     preferences.putDouble("brewKp", BrewKp);
     preferences.putDouble("brewKi", BrewKi);
     preferences.putDouble("brewKd", BrewKd);
-    preferences.putInt("brewDelay", brewDelaySeconds);
+    preferences.putInt("brewBoost", brewBoostSeconds);
+    preferences.putInt("brewPause", brewPauseSeconds);
     preferences.end();
+    Serial.println("[STORAGE] Brew settings saved to NVS");
 }
 
 // ========== HEATING PID API FUNCTIONS ==========
@@ -329,9 +446,9 @@ void setPIDTunings(double kp, double ki, double kd) {
     Kp = kp;
     Ki = ki;
     Kd = kd;
-    myPID.SetTunings(Kp, Ki, Kd, 1);
-    savePIDToStorage();
-    Serial.printf("[CONTROLS] PID tunings updated: Kp=%.1f, Ki=%.3f, Kd=%.1f (saved to NVS)\n", Kp, Ki, Kd);
+    myPID.SetTunings(Kp, Ki, Kd);
+    savePIDToStorage();  // Save to persistent storage
+    Serial.printf("[CONTROLS] PID tunings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f (saved to NVS)\n", Kp, Ki, Kd);
 }
 
 void getPIDTunings(double &kp, double &ki, double &kd) {
@@ -341,12 +458,13 @@ void getPIDTunings(double &kp, double &ki, double &kd) {
 }
 
 void setTargetTemp(double temp) {
-    if (temp >= SETTEMP_MIN && temp <= SETTEMP_MAX) {
+    if (temp >= 0.0 && temp <= 120.0) {
         STATE_LOCK();
         state.setTemp = temp;
         STATE_UNLOCK();
         pidSetpoint = temp;
-        savePIDToStorage();
+        savePIDToStorage();  // Save to persistent storage
+        Serial.printf("[CONTROLS] Target temperature set to %.1f°C (saved to NVS)\n", temp);
     }
 }
 
@@ -369,8 +487,6 @@ void loadPIDFromStorage() {
     Kp = preferences.getDouble("Kp", DEFAULT_KP);
     Ki = preferences.getDouble("Ki", DEFAULT_KI);
     Kd = preferences.getDouble("Kd", DEFAULT_KD);
-    IMax = preferences.getDouble("IMax", DEFAULT_IMAX);
-    emaFactor = preferences.getDouble("emaFactor", DEFAULT_EMA_FACTOR);
     
     // Load target temperature
     state.setTemp = preferences.getDouble("targetTemp", DEFAULT_TARGET_TEMP);
@@ -380,11 +496,15 @@ void loadPIDFromStorage() {
     BrewKp = preferences.getDouble("brewKp", DEFAULT_BREW_KP);
     BrewKi = preferences.getDouble("brewKi", DEFAULT_BREW_KI);
     BrewKd = preferences.getDouble("brewKd", DEFAULT_BREW_KD);
-    brewDelaySeconds = preferences.getInt("brewDelay", DEFAULT_BREW_DELAY_SECONDS);
+    brewBoostSeconds = preferences.getInt("brewBoost", DEFAULT_BREW_BOOST_SECONDS);
+    brewPauseSeconds = preferences.getInt("brewPause", DEFAULT_BREW_PAUSE_SECONDS);
     
     preferences.end();
-    Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f°C | Brew delay=%ds\n",
-                  Kp, Ki, Kd, state.setTemp, brewDelaySeconds);
+    
+    Serial.println("[STORAGE] PID settings loaded from NVS:");
+    Serial.printf("  Kp = %.1f, Ki = %.2f, Kd = %.1f, Target = %.1f\u00b0C\n", Kp, Ki, Kd, state.setTemp);
+    Serial.printf("  Brew Kp = %.1f, Ki = %.2f, Kd = %.1f, Boost = %ds, Pause = %ds\n",
+                  BrewKp, BrewKi, BrewKd, brewBoostSeconds, brewPauseSeconds);
 }
 
 /**
@@ -398,11 +518,11 @@ void savePIDToStorage() {
     preferences.putDouble("Kp", Kp);
     preferences.putDouble("Ki", Ki);
     preferences.putDouble("Kd", Kd);
-    preferences.putDouble("IMax", IMax);
-    preferences.putDouble("emaFactor", emaFactor);
     preferences.putDouble("targetTemp", state.setTemp);
     
     preferences.end();
+    
+    Serial.println("[STORAGE] PID settings saved to NVS");
 }
 
 /**
@@ -414,19 +534,18 @@ void resetPIDToDefaults() {
     Kp = DEFAULT_KP;
     Ki = DEFAULT_KI;
     Kd = DEFAULT_KD;
-    IMax = DEFAULT_IMAX;
-    emaFactor = DEFAULT_EMA_FACTOR;
-
-    STATE_LOCK();
     state.setTemp = DEFAULT_TARGET_TEMP;
-    STATE_UNLOCK();
-    pidSetpoint = DEFAULT_TARGET_TEMP;
-
-    myPID.SetTunings(Kp, Ki, Kd, 1);
-    myPID.SetIntegratorLimits(0, IMax);
-    myPID.SetSmoothingFactor(emaFactor);
-
+    pidSetpoint = state.setTemp;
+    
+    // Update PID controller
+    myPID.SetTunings(Kp, Ki, Kd);
+    
+    // Save to storage
     savePIDToStorage();
-    Serial.printf("[STORAGE] Reset to defaults | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f°C\n",
-                  Kp, Ki, Kd, state.setTemp);
+    
+    Serial.println("[STORAGE] PID settings reset to factory defaults:");
+    Serial.printf("  Kp = %.1f\n", Kp);
+    Serial.printf("  Ki = %.2f\n", Ki);
+    Serial.printf("  Kd = %.1f\n", Kd);
+    Serial.printf("  Target = %.1f°C\n", state.setTemp);
 }

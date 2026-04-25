@@ -3,7 +3,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include "Config.h"
 
 enum DisplayMode {
     MODE_CURRENT,
@@ -12,14 +11,14 @@ enum DisplayMode {
 };
 
 struct SystemState {
-    float currentTemp = 88.88;          // Sentinel: all segments lit until first valid read
-    float setTemp = DEFAULT_TARGET_TEMP; // Overwritten by loadPIDFromStorage() on boot
+    float currentTemp = 88.88;
+    float setTemp = 20.0; // Initial value, will be overwritten by loadPIDFromStorage()
     float pidOutput = 0.0;
-    DisplayMode displayMode = MODE_CURRENT;
-    float tempSensitivity = SENSITIVITY_FINE;
-    int consecutiveSensorFailures = 0;
-    bool sensorError = false;
-    bool brewMode = false;
+    DisplayMode displayMode = MODE_SET; // Default to set temp mode
+    float tempSensitivity = 1.0; // Temperature adjustment step: 1.0 or 0.1 degrees
+    int consecutiveSensorFailures = 0; // Track consecutive failed sensor reads
+    bool sensorError = false; // Sensor error state
+    bool brewMode = false; // Brew mode active (toggled by GPIO 0 button)
 };
 
 extern SystemState state; // Tell the world this variable exists

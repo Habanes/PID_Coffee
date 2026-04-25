@@ -19,9 +19,6 @@
 // Brew button (active LOW, internal pull-up)
 #define PIN_BREW                2
 
-// Buzzer (reserved, not currently used)
-#define BUZZER_PIN              47
-
 // 7-Segment display — digit enable pins (common anode, active HIGH)
 #define PIN_DISP_DIGIT1         3
 #define PIN_DISP_DIGIT2         11
@@ -102,6 +99,11 @@
 #define WEB_BODY_READ_TIMEOUT_MS    1000    // Timeout waiting for POST body (ms)
 #define WEB_SEND_BUFFER_SIZE        1024    // Chunk size for PROGMEM file transfer (bytes)
 
+#define WIFI_SSID                   "BabaLan"
+#define WIFI_PASSWORD               "bittegibmirinternet"
+#define WIFI_AP_SSID                "QuickMill-PID"
+#define WIFI_AP_PASSWORD            "espresso123"
+
 // =====================================================================
 // RTOS TASKS
 // =====================================================================
@@ -137,6 +139,7 @@
 #define DEFAULT_BREW_KP             50.0
 #define DEFAULT_BREW_KI             0.0     // Integral disabled during brew
 #define DEFAULT_BREW_KD             1000.0  // = Tv * Kp  (20.0 * 50.0)
-#define DEFAULT_BREW_DELAY_SECONDS  10      // Seconds heater is off after brew starts
+#define DEFAULT_BREW_BOOST_SECONDS  10      // Seconds at 100% duty before brew PID takes over
+#define DEFAULT_BREW_PAUSE_SECONDS  0       // Seconds at 0% duty after boost before brew PID takes over
 
 #endif // CONFIG_H
