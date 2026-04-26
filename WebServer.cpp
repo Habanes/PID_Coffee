@@ -24,10 +24,11 @@ const char index_html[] PROGMEM = R"rawliteral(
 <body>
     <div class="container">
         <header>
-            <h1>QuickMill PID Controller</h1>
+            <h1>QuickMill Orione 3000 PID Control</h1>
             <div class="status-badge" id="statusBadge">Disconnected</div>
         </header>
 
+        <!-- Live value cards -->
         <div class="grid">
             <div class="card">
                 <div class="card-title">Current Temperature</div>
@@ -36,7 +37,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <span class="unit">°C</span>
                 </div>
             </div>
-
             <div class="card">
                 <div class="card-title">Set Temperature</div>
                 <div class="value-display" id="setTemp">
@@ -44,7 +44,6 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <span class="unit">°C</span>
                 </div>
             </div>
-
             <div class="card">
                 <div class="card-title">PID Output</div>
                 <div class="value-display" id="pidOutput">
@@ -52,16 +51,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <span class="unit">ms</span>
                 </div>
             </div>
-
-            <div class="card">
-                <div class="card-title">Duty Cycle</div>
-                <div class="value-display" id="dutyCycle">
-                    <span class="value">45.0</span>
-                    <span class="unit">%</span>
-                </div>
+            <div class="card status-card" id="statusCard">
+                <div class="card-title">Status</div>
+                <div class="status-display" id="machineStatus">Heating Up</div>
             </div>
         </div>
 
+        <!-- Temperature history chart -->
         <div class="chart-container">
             <div class="card">
                 <div class="card-title">Temperature History</div>
@@ -69,6 +65,7 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
 
+        <!-- Duty cycle bar -->
         <div class="card">
             <div class="card-title">Relay Duty Cycle</div>
             <div class="duty-bar-container">
@@ -78,18 +75,25 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
 
+        <!-- Temperature set + Emergency Off -->
         <div class="card">
-            <div class="card-title">Testing Controls</div>
-            <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                <button class="btn-relay-override" id="relayForceOffBtn" onclick="toggleRelayForceOff()">Relay: ON (PID controlled)</button>
-                <span style="color:#666; font-size:0.9em;">Force relay OFF to let cold water cool the system without heating.</span>
+            <div class="card-title">Temperature Control</div>
+            <div class="temp-control-row">
+                <div class="control-group" style="flex: 1; min-width: 180px;">
+                    <label for="targetInput">Target Temperature (°C)</label>
+                    <input type="number" id="targetInput" step="0.5" value="93.0" min="0" max="120">
+                </div>
+                <button class="btn-primary" onclick="applyTargetTemp(this)">Set Temperature</button>
+                <button class="btn-emergency" id="relayForceOffBtn" onclick="toggleRelayForceOff()">Emergency Off</button>
             </div>
         </div>
 
+        <!-- PID Parameters: heating row + brewing row -->
         <div class="card">
-            <div class="card-title">PID Configuration</div>
+            <div class="card-title">PID Parameters</div>
             <div class="pid-controls">
-                <div class="control-grid">
+                <div class="pid-section-label">Heating</div>
+                <div class="control-grid-3">
                     <div class="control-group">
                         <label for="kpInput">Kp (Proportional)</label>
                         <input type="number" id="kpInput" step="0.1" value="75.0" min="0" max="500">
@@ -102,39 +106,41 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <label for="kdInput">Kd (Derivative)</label>
                         <input type="number" id="kdInput" step="0.1" value="0.0" min="0" max="2000">
                     </div>
+                </div>
+
+                <div class="pid-section-label" style="margin-top: 8px;">Brewing</div>
+                <div class="control-grid-3">
                     <div class="control-group">
-                        <label for="targetInput">Target Temperature (°C)</label>
-                        <input type="number" id="targetInput" step="0.5" value="93.0" min="0" max="120">
+                        <label for="brewKpInput">Kp (Proportional)</label>
+                        <input type="number" id="brewKpInput" step="0.1" value="50.0" min="0" max="500">
+                    </div>
+                    <div class="control-group">
+                        <label for="brewKiInput">Ki (Integral)</label>
+                        <input type="number" id="brewKiInput" step="0.1" value="0.5" min="0" max="50">
+                    </div>
+                    <div class="control-group">
+                        <label for="brewKdInput">Kd (Derivative)</label>
+                        <input type="number" id="brewKdInput" step="0.1" value="8.0" min="0" max="2000">
                     </div>
                 </div>
+
                 <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    <button class="btn-primary" onclick="applyPIDSettings(this)" style="flex: 1;">Apply Settings</button>
-                    <button class="btn-reset" onclick="resetPIDSettings(this)" style="flex: 1;">Reset to Defaults</button>
-                    <button class="btn-reset" onclick="resetPIDMemory(this)" style="flex: 1; background: linear-gradient(135deg, #6c757d 0%, #495057 100%);">Reset PID Memory</button>
+                    <button class="btn-primary" onclick="applyAllPID(this)" style="flex: 1;">Apply PID Values</button>
+                    <button class="btn-reset" onclick="resetAllPID(this)" style="flex: 1;">Reset PID Values</button>
+                    <button class="btn-reset" onclick="resetPIDMemory(this)" style="flex: 1; background: linear-gradient(135deg, #1a1a10 0%, #0f0f08 100%);">Reset PID Memory</button>
                 </div>
             </div>
         </div>
 
+        <!-- Brew timing -->
         <div class="card">
-            <div class="card-title">Brew Mode Configuration</div>
+            <div class="card-title">Brew Timing</div>
             <div class="brew-status-row">
                 <span class="brew-status-indicator" id="brewStatusBadge">INACTIVE</span>
                 <span class="brew-status-label" id="brewStatusLabel">Brew mode off &mdash; press GPIO&nbsp;0 button to activate</span>
             </div>
             <div class="pid-controls">
                 <div class="control-grid">
-                    <div class="control-group">
-                        <label for="brewKpInput">Brew Kp (Proportional)</label>
-                        <input type="number" id="brewKpInput" step="0.1" value="50.0" min="0" max="500">
-                    </div>
-                    <div class="control-group">
-                        <label for="brewKiInput">Brew Ki (Integral)</label>
-                        <input type="number" id="brewKiInput" step="0.1" value="0.5" min="0" max="50">
-                    </div>
-                    <div class="control-group">
-                        <label for="brewKdInput">Brew Kd (Derivative)</label>
-                        <input type="number" id="brewKdInput" step="0.1" value="8.0" min="0" max="2000">
-                    </div>
                     <div class="control-group">
                         <label for="brewBoostSecondsInput">Boost Duration (s)</label>
                         <input type="number" id="brewBoostSecondsInput" step="1" value="5" min="0" max="30">
@@ -153,14 +159,14 @@ const char index_html[] PROGMEM = R"rawliteral(
                     </div>
                 </div>
                 <div style="display: flex; gap: 10px;">
-                    <button class="btn-brew" onclick="applyBrewSettings(this)" style="flex: 1;">Apply Brew Settings</button>
-                    <button class="btn-reset" onclick="resetBrewSettings(this)" style="flex: 1;">Reset Brew Defaults</button>
+                    <button class="btn-brew" onclick="applyBrewSettings(this)" style="flex: 1;">Apply Timing</button>
+                    <button class="btn-reset" onclick="resetBrewSettings(this)" style="flex: 1;">Reset Defaults</button>
                 </div>
             </div>
         </div>
 
         <footer>
-            <p>QuickMill Orione 3000 | ESP32-S3 PID Temperature Controller</p>
+            <p>ESP32-S3 PID | Habanes</p>
         </footer>
     </div>
 
@@ -172,271 +178,429 @@ const char index_html[] PROGMEM = R"rawliteral(
 
 const char style_css[] PROGMEM = R"rawliteral(
 * { margin: 0; padding: 0; box-sizing: border-box; }
+
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, #010202 0%, #12130b 100%);
+    background-attachment: fixed;
     min-height: 100vh;
     padding: 20px;
-    color: #333;
+    color: #b6926e;
+    position: relative;
 }
-.container { max-width: 1200px; margin: 0 auto; }
+
+/* Grain overlay — dithers the dark gradient to remove color banding */
+body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.055;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-size: 200px 200px;
+}
+
+.container { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; }
 .container > .card { margin-bottom: 20px; }
+
 header {
-    background: rgba(255, 255, 255, 0.95);
+    background: #020404;
+    border: 1px solid rgba(182, 146, 110, 0.3);
     padding: 20px 30px;
-    border-radius: 15px;
+    border-radius: 8px;
     margin-bottom: 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
 }
-header h1 { font-size: 2em; color: #667eea; }
+
+header h1 { font-size: 2em; color: #b6926e; }
+
 .status-badge {
     padding: 8px 20px;
-    border-radius: 20px;
+    border-radius: 12px;
     font-weight: bold;
     font-size: 0.9em;
-    background: #ff6b6b;
-    color: white;
+    background: #2a0f0f;
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.25);
     animation: pulse 2s infinite;
 }
-.status-badge.connected { background: #51cf66; animation: none; }
+
+.status-badge.connected {
+    background: #103715;
+    color: #b6926e;
+    border-color: rgba(182, 146, 110, 0.4);
+    animation: none;
+}
+
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
 .grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
     gap: 20px;
     margin-bottom: 20px;
 }
+
 .card {
-    background: rgba(255, 255, 255, 0.95);
+    background: #020404;
+    border: 1px solid rgba(182, 146, 110, 0.2);
     padding: 25px;
-    border-radius: 15px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
 }
+
 .card:hover {
-    transform: translateY(-5px);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+    transform: translateY(-4px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.7);
+    border-color: rgba(182, 146, 110, 0.45);
 }
+
 .card-title {
     font-size: 1em;
-    color: #666;
+    color: rgba(182, 146, 110, 0.6);
     margin-bottom: 15px;
     text-transform: uppercase;
     letter-spacing: 1px;
     font-weight: 600;
 }
+
 .value-display {
     display: flex;
     align-items: baseline;
     justify-content: center;
 }
+
 .value-display .value {
     font-size: 3em;
     font-weight: bold;
-    color: #667eea;
+    color: #b6926e;
     margin-right: 10px;
 }
-.value-display .unit { font-size: 1.5em; color: #999; }
+
+.value-display .unit { font-size: 1.5em; color: rgba(182, 146, 110, 0.5); }
+
 .chart-container { margin-bottom: 20px; }
 .chart-container canvas { max-height: 300px; }
+
 .duty-bar-container {
     width: 100%;
     height: 40px;
-    background: #e9ecef;
-    border-radius: 10px;
+    background: rgba(182, 146, 110, 0.08);
+    border: 1px solid rgba(182, 146, 110, 0.2);
+    border-radius: 6px;
     overflow: hidden;
     position: relative;
 }
+
 .duty-bar {
     height: 100%;
-    background: #51cf66;
+    background: #103715;
     transition: width 0.5s ease, background-color 0.3s ease;
     display: flex;
     align-items: center;
     justify-content: center;
     min-width: 60px;
 }
-.duty-bar.error {
-    background: #ff6b6b;
-}
+
+.duty-bar.error { background: #2a0f0f; }
+
 .duty-bar-text {
-    color: white;
+    color: #b6926e;
     font-weight: bold;
     font-size: 1.1em;
-    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.3);
+    text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.6);
 }
+
 .pid-controls {
     display: flex;
     flex-direction: column;
     gap: 20px;
 }
+
 .control-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 15px;
 }
+
 .control-group {
     display: flex;
     flex-direction: column;
     gap: 8px;
 }
+
 .control-group label {
     font-size: 0.9em;
-    color: #666;
+    color: rgba(182, 146, 110, 0.7);
     font-weight: 600;
 }
+
 .control-group input {
     padding: 12px 15px;
-    border: 2px solid #e9ecef;
-    border-radius: 8px;
+    border: 1px solid rgba(182, 146, 110, 0.3);
+    border-radius: 5px;
     font-size: 1.1em;
     font-weight: bold;
-    color: #667eea;
-    background: white;
+    color: #b6926e;
+    background: #010202;
     transition: border-color 0.3s ease, box-shadow 0.3s ease;
 }
+
 .control-group input:focus {
     outline: none;
-    border-color: #667eea;
-    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    border-color: #b6926e;
+    box-shadow: 0 0 0 3px rgba(182, 146, 110, 0.1);
 }
-.control-group input:hover {
-    border-color: #b8c5f0;
+
+.control-group input:hover { border-color: rgba(182, 146, 110, 0.6); }
+
+/* Style the native number spinner buttons */
+.control-group input[type=number]::-webkit-inner-spin-button,
+.control-group input[type=number]::-webkit-outer-spin-button {
+    opacity: 1;
+    background: rgba(182, 146, 110, 0.1);
+    border-left: 1px solid rgba(182, 146, 110, 0.25);
+    cursor: pointer;
+    filter: invert(65%) sepia(30%) saturate(400%) hue-rotate(5deg) brightness(0.8);
+    border-radius: 0 4px 4px 0;
+    width: 18px;
 }
+.control-group input[type=number]::-webkit-inner-spin-button:hover,
+.control-group input[type=number]::-webkit-outer-spin-button:hover {
+    background: rgba(182, 146, 110, 0.22);
+    filter: invert(75%) sepia(35%) saturate(450%) hue-rotate(5deg) brightness(0.9);
+}
+
 .btn-primary {
     padding: 15px 30px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
+    background: linear-gradient(135deg, #103715 0%, #0a2410 100%);
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.3);
+    border-radius: 6px;
     font-size: 1.1em;
     font-weight: bold;
     cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.3s ease;
-    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+    transition: transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
+
 .btn-primary:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 6px 20px rgba(16, 55, 21, 0.5);
+    border-color: #b6926e;
 }
+
 .btn-primary:active {
     transform: translateY(0);
-    box-shadow: 0 2px 10px rgba(102, 126, 234, 0.3);
+    box-shadow: 0 2px 10px rgba(16, 55, 21, 0.3);
 }
+
 .btn-reset {
     padding: 15px 30px;
-    background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
+    background: linear-gradient(135deg, #2a0f0f 0%, #1a0808 100%);
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.3);
+    border-radius: 6px;
     font-size: 1.1em;
     font-weight: bold;
     cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.3s ease;
-    box-shadow: 0 4px 15px rgba(255, 107, 107, 0.3);
+    transition: transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
+
 .btn-reset:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+    box-shadow: 0 6px 20px rgba(42, 15, 15, 0.5);
+    border-color: #b6926e;
 }
+
 .btn-reset:active {
     transform: translateY(0);
-    box-shadow: 0 2px 10px rgba(255, 107, 107, 0.3);
+    box-shadow: 0 2px 10px rgba(42, 15, 15, 0.3);
 }
+
 .btn-brew {
     padding: 15px 30px;
-    background: linear-gradient(135deg, #fd7c20 0%, #e06010 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
+    background: linear-gradient(135deg, #103715 0%, #0a2410 100%);
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.3);
+    border-radius: 6px;
     font-size: 1.1em;
     font-weight: bold;
     cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.3s ease;
-    box-shadow: 0 4px 15px rgba(253, 124, 32, 0.3);
+    transition: transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
+
 .btn-brew:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(253, 124, 32, 0.4);
+    box-shadow: 0 6px 20px rgba(16, 55, 21, 0.5);
+    border-color: #b6926e;
 }
+
 .btn-brew:active {
     transform: translateY(0);
-    box-shadow: 0 2px 10px rgba(253, 124, 32, 0.3);
+    box-shadow: 0 2px 10px rgba(16, 55, 21, 0.3);
 }
+
 .btn-relay-override {
     padding: 15px 30px;
-    background: linear-gradient(135deg, #28a745 0%, #1e7e34 100%);
-    color: white;
-    border: none;
-    border-radius: 10px;
+    background: linear-gradient(135deg, #103715 0%, #0a2410 100%);
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.3);
+    border-radius: 6px;
     font-size: 1.1em;
     font-weight: bold;
     cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.3s ease, background 0.3s ease;
-    box-shadow: 0 4px 15px rgba(40, 167, 69, 0.3);
+    transition: transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.4);
 }
+
 .btn-relay-override:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(40, 167, 69, 0.4);
+    box-shadow: 0 6px 20px rgba(16, 55, 21, 0.5);
+    border-color: #b6926e;
 }
+
 .btn-relay-override.forced-off {
-    background: linear-gradient(135deg, #dc3545 0%, #b02030 100%);
-    box-shadow: 0 4px 15px rgba(220, 53, 69, 0.4);
+    background: linear-gradient(135deg, #2a0f0f 0%, #1a0808 100%);
+    box-shadow: 0 4px 15px rgba(42, 15, 15, 0.4);
 }
+
 .btn-relay-override.forced-off:hover {
-    box-shadow: 0 6px 20px rgba(220, 53, 69, 0.5);
+    box-shadow: 0 6px 20px rgba(42, 15, 15, 0.6);
+    border-color: #b6926e;
 }
+
 .brew-status-row {
     display: flex;
     align-items: center;
     gap: 12px;
     margin-bottom: 20px;
 }
+
 .brew-status-indicator {
     padding: 6px 16px;
-    border-radius: 20px;
+    border-radius: 12px;
     font-weight: bold;
     font-size: 0.85em;
-    background: #e9ecef;
-    color: #888;
+    background: rgba(182, 146, 110, 0.08);
+    color: rgba(182, 146, 110, 0.45);
+    border: 1px solid rgba(182, 146, 110, 0.18);
     transition: all 0.3s ease;
     white-space: nowrap;
 }
 .brew-status-indicator.active {
-    background: #fd7c20;
-    color: white;
+    background: #261608;
+    color: #b6926e;
+    border-color: rgba(182, 146, 110, 0.5);
     animation: pulse 1s infinite;
 }
 .brew-status-indicator.boost {
-    background: #ff4444;
-    color: white;
+    background: #2a0f0f;
+    color: #b6926e;
+    border-color: rgba(182, 146, 110, 0.5);
     animation: pulse 0.5s infinite;
 }
 .brew-status-indicator.delay {
-    background: #4dabf7;
-    color: white;
+    background: #080f1a;
+    color: #b6926e;
+    border-color: rgba(182, 146, 110, 0.5);
     animation: pulse 0.5s infinite;
 }
-.brew-status-label {
-    color: #888;
-    font-size: 0.9em;
+.brew-status-label { color: rgba(182, 146, 110, 0.55); font-size: 0.9em; }
+
+/* Status card */
+.status-display {
+    font-size: 1.8em;
+    font-weight: bold;
+    text-align: center;
+    padding: 10px 0;
+    color: #b6926e;
+    transition: color 0.4s ease;
 }
+
+.status-display.heating  { color: #b6926e; }
+.status-display.brewing  { color: #4caf6a; }
+.status-display.emergency { color: #b84040; animation: pulse 0.8s infinite; }
+
+/* Temperature control row */
+.temp-control-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+/* Emergency Off button — always red */
+.btn-emergency {
+    padding: 15px 30px;
+    background: linear-gradient(135deg, #2a0f0f 0%, #1a0808 100%);
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.35);
+    border-radius: 6px;
+    font-size: 1.1em;
+    font-weight: bold;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: transform 0.2s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+    box-shadow: 0 4px 15px rgba(42, 15, 15, 0.5);
+}
+
+.btn-emergency:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(42, 15, 15, 0.7);
+    border-color: #b6926e;
+}
+
+.btn-emergency:active { transform: translateY(0); }
+
+.btn-emergency.forced-off {
+    border-color: rgba(182, 146, 110, 0.6);
+    box-shadow: 0 4px 20px rgba(42, 15, 15, 0.9);
+    animation: pulse 1s infinite;
+}
+
+/* 3-column fixed grid for PID parameter rows */
+.control-grid-3 {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+}
+
+/* Section divider label inside PID card */
+.pid-section-label {
+    font-size: 0.78em;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: rgba(182, 146, 110, 0.4);
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(182, 146, 110, 0.1);
+}
+
 footer {
-    background: rgba(255, 255, 255, 0.95);
+    background: #020404;
+    border: 1px solid rgba(182, 146, 110, 0.2);
     padding: 15px;
-    border-radius: 15px;
+    border-radius: 8px;
     text-align: center;
     margin-top: 20px;
-    color: #666;
+    color: rgba(182, 146, 110, 0.5);
 }
+
 @media (max-width: 768px) {
     header { flex-direction: column; text-align: center; gap: 15px; }
     header h1 { font-size: 1.5em; }
     .value-display .value { font-size: 2.5em; }
     .grid { grid-template-columns: 1fr; }
+    .control-grid-3 { grid-template-columns: 1fr; }
+    .temp-control-row { flex-direction: column; align-items: stretch; }
 }
 )rawliteral";
 
@@ -446,29 +610,47 @@ if (typeof Chart === 'undefined') { console.error('Chart.js not loaded!'); }
 const ctx = document.getElementById('tempChart').getContext('2d');
 const chart = new Chart(ctx, {
     type: 'line',
-    data: { labels: [], datasets: [{
-        label: 'Current Temp (°C)', data: [], borderColor: '#667eea',
-        backgroundColor: 'rgba(102, 126, 234, 0.1)', borderWidth: 3, tension: 0.4, fill: true, pointRadius: 0
-    }, {
-        label: 'Set Temp (°C)', data: [], borderColor: '#ff6b6b',
-        backgroundColor: 'transparent', borderWidth: 2, borderDash: [5, 5], tension: 0, fill: false, pointRadius: 0
-    }]},
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Current Temp (\u00b0C)', data: [], borderColor: '#103715',
+            backgroundColor: 'rgba(16, 55, 21, 0.15)', borderWidth: 2,
+            tension: 0.4, fill: true, pointRadius: 0,
+        }, {
+            label: 'Set Temp (\u00b0C)', data: [], borderColor: '#b84040',
+            backgroundColor: 'transparent', borderWidth: 1.5,
+            borderDash: [5, 5], tension: 0, fill: false, pointRadius: 0,
+        }],
+    },
     options: {
         responsive: true, maintainAspectRatio: true,
-        plugins: { legend: { display: true, position: 'top' }, tooltip: { mode: 'index', intersect: false } },
-        scales: {
-            x: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { maxTicksLimit: 10 } },
-            y: { display: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { callback: v => v+'°C' } }
+        plugins: {
+            legend: {
+                display: true, position: 'top',
+                labels: { color: 'rgba(182, 146, 110, 0.75)', boxWidth: 16 },
+            },
+            tooltip: { mode: 'index', intersect: false },
         },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
-    }
+        scales: {
+            x: {
+                display: true,
+                grid: { color: 'rgba(182, 146, 110, 0.07)' },
+                ticks: { color: 'rgba(182, 146, 110, 0.5)', maxTicksLimit: 10 },
+            },
+            y: {
+                display: true,
+                grid: { color: 'rgba(182, 146, 110, 0.07)' },
+                ticks: { color: 'rgba(182, 146, 110, 0.5)', callback: v => v + '\u00b0C' },
+            },
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    },
 });
 const MAX_DATA_POINTS = 200;
 function updateDashboard() {
     document.querySelector('#currentTemp .value').textContent = currentTemp.toFixed(1);
     document.querySelector('#setTemp .value').textContent = setTemp.toFixed(1);
     document.querySelector('#pidOutput .value').textContent = Math.round(pidOutput);
-    document.querySelector('#dutyCycle .value').textContent = dutyCycle.toFixed(1);
     const dutyBar = document.getElementById('dutyBar');
     dutyBar.style.width = dutyCycle + '%';
     dutyBar.querySelector('.duty-bar-text').textContent = dutyCycle.toFixed(1) + '%';
@@ -477,14 +659,16 @@ function updateDashboard() {
     chart.data.datasets[0].data.push(currentTemp);
     chart.data.datasets[1].data.push(setTemp);
     if (chart.data.labels.length > MAX_DATA_POINTS) {
-        chart.data.labels.shift(); chart.data.datasets[0].data.shift(); chart.data.datasets[1].data.shift();
+        chart.data.labels.shift();
+        chart.data.datasets[0].data.shift();
+        chart.data.datasets[1].data.shift();
     }
     if (chart.data.datasets[0].data.length > 0) {
         const allTemps = [...chart.data.datasets[0].data, ...chart.data.datasets[1].data];
         const minTemp = Math.min(...allTemps);
         const maxTemp = Math.max(...allTemps);
         const range = maxTemp - minTemp;
-        const margin = range * 0.1;
+        const margin = Math.max(range * 0.1, 0.5);
         chart.options.scales.y.min = Math.floor(minTemp - margin);
         chart.options.scales.y.max = Math.ceil(maxTemp + margin);
     }
@@ -494,11 +678,30 @@ function fetchRealData() {
     fetch('/api/data').then(r => r.json()).then(data => {
         currentTemp = data.currentTemp; setTemp = data.setTemp;
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
+        dashboardAPI.setConnectionStatus(true);
         dashboardAPI.setRelayError(data.error);
         updateBrewStatus(data.brewMode, data.brewBoostPhase, data.brewDelayPhase);
         updateRelayForceBtn(data.relayForceOff);
+        updateMachineStatus(data.relayForceOff, data.brewMode);
         updateDashboard();
-    }).catch(e => console.error('Fetch error:', e));
+    }).catch(e => {
+        console.error('Fetch error:', e);
+        dashboardAPI.setConnectionStatus(false);
+    });
+}
+function updateMachineStatus(emergencyOff, brewMode) {
+    const el = document.getElementById('machineStatus');
+    if (!el) return;
+    if (emergencyOff) {
+        el.textContent = 'Emergency Off';
+        el.className = 'status-display emergency';
+    } else if (brewMode) {
+        el.textContent = 'Brewing';
+        el.className = 'status-display brewing';
+    } else {
+        el.textContent = 'Heating Up';
+        el.className = 'status-display heating';
+    }
 }
 function updateBrewStatus(brewMode, boostPhase, delayPhase) {
     const badge = document.getElementById('brewStatusBadge');
@@ -523,10 +726,10 @@ function updateRelayForceBtn(forceOff) {
     if (!btn) return;
     if (forceOff) {
         btn.classList.add('forced-off');
-        btn.textContent = 'Relay: FORCED OFF (testing)';
+        btn.textContent = 'Emergency Off [ACTIVE]';
     } else {
         btn.classList.remove('forced-off');
-        btn.textContent = 'Relay: ON (PID controlled)';
+        btn.textContent = 'Emergency Off';
     }
 }
 function toggleRelayForceOff() {
@@ -539,25 +742,74 @@ function toggleRelayForceOff() {
         updateRelayForceBtn(d.forceOff);
     }).catch(e => { console.error('Relay force error:', e); alert('Failed to toggle relay'); });
 }
-function applyPIDSettings(btn) {
+function applyAllPID(btn) {
     const kp = parseFloat(document.getElementById('kpInput').value);
     const ki = parseFloat(document.getElementById('kiInput').value);
     const kd = parseFloat(document.getElementById('kdInput').value);
     const target = parseFloat(document.getElementById('targetInput').value);
-    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(target)) { alert('Invalid input'); return; }
-    if (kp<0||kp>500) { alert('Kp: 0-500'); return; }
-    if (ki<0||ki>50) { alert('Ki: 0-50'); return; }
-    if (kd<0||kd>2000) { alert('Kd: 0-2000'); return; }
-    if (target<0||target>120) { alert('Temp: 0-120\u00b0C'); return; }
-    fetch('/api/setPID', {
+    const brewKp = parseFloat(document.getElementById('brewKpInput').value);
+    const brewKi = parseFloat(document.getElementById('brewKiInput').value);
+    const brewKd = parseFloat(document.getElementById('brewKdInput').value);
+    const boostSeconds = parseInt(document.getElementById('brewBoostSecondsInput').value);
+    const boostDuty = parseInt(document.getElementById('brewBoostDutyInput').value);
+    const delaySeconds = parseInt(document.getElementById('brewDelaySecondsInput').value);
+    const delayDuty = parseInt(document.getElementById('brewDelayDutyInput').value);
+    if (isNaN(kp)||kp<0||kp>500) { alert('Kp: 0-500'); return; }
+    if (isNaN(ki)||ki<0||ki>50) { alert('Ki: 0-50'); return; }
+    if (isNaN(kd)||kd<0||kd>2000) { alert('Kd: 0-2000'); return; }
+    if (isNaN(target)||target<0||target>120) { alert('Temp: 0-120\u00b0C'); return; }
+    if (isNaN(brewKp)||brewKp<0||brewKp>500) { alert('Brew Kp: 0-500'); return; }
+    if (isNaN(brewKi)||brewKi<0||brewKi>50) { alert('Brew Ki: 0-50'); return; }
+    if (isNaN(brewKd)||brewKd<0||brewKd>2000) { alert('Brew Kd: 0-2000'); return; }
+    if (isNaN(boostSeconds)||boostSeconds<0||boostSeconds>30) { alert('Boost: 0-30s'); return; }
+    if (isNaN(boostDuty)||boostDuty<0||boostDuty>100) { alert('Boost duty: 0-100%'); return; }
+    if (isNaN(delaySeconds)||delaySeconds<0||delaySeconds>30) { alert('Delay: 0-30s'); return; }
+    if (isNaN(delayDuty)||delayDuty<0||delayDuty>100) { alert('Delay duty: 0-100%'); return; }
+    fetch('/api/setAllSettings', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp,ki,kd,target})
-    }).then(r=>r.json()).then(d=>{
+        body: JSON.stringify({kp, ki, kd, target, brewKp, brewKi, brewKd, boostSeconds, boostDuty, delaySeconds, delayDuty})
+    }).then(r => r.json()).then(() => {
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
         setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
-    }).catch(e => { console.error('Update error:', e); alert('Failed to update PID'); });
+    }).catch(e => { console.error('Apply all error:', e); alert('Failed to apply PID values'); });
 }
+function resetAllPID(btn) {
+    if (!confirm('Reset all PID values (heating + brewing) to factory defaults?')) return;
+    fetch('/api/resetAllSettings', {
+        method: 'POST', headers: {'Content-Type':'application/json'}
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            document.getElementById('kpInput').value = d.kp;
+            document.getElementById('kiInput').value = d.ki;
+            document.getElementById('kdInput').value = d.kd;
+            document.getElementById('targetInput').value = d.target;
+            document.getElementById('brewKpInput').value = d.brewKp;
+            document.getElementById('brewKiInput').value = d.brewKi;
+            document.getElementById('brewKdInput').value = d.brewKd;
+            document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
+            document.getElementById('brewBoostDutyInput').value = d.boostDuty;
+            document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
+            document.getElementById('brewDelayDutyInput').value = d.delayDuty;
+            const txt = btn.textContent;
+            btn.textContent = 'Reset Complete \u2713';
+            setTimeout(() => { btn.textContent = txt; }, 2000);
+        }
+    }).catch(e => { console.error('Reset all error:', e); alert('Failed to reset PID values'); });
+}
+function applyTargetTemp(btn) {
+    const target = parseFloat(document.getElementById('targetInput').value);
+    if (isNaN(target) || target < 0 || target > 120) { alert('Temp: 0\u2013120\u00b0C'); return; }
+    fetch('/api/setTarget', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ target }),
+    }).then(r => r.json()).then(() => {
+        const txt = btn.textContent;
+        btn.textContent = 'Set \u2713'; btn.style.backgroundColor = '#103715';
+        setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
+    }).catch(e => { console.error('Set temp error:', e); alert('Failed to set temperature'); });
+}
+
 function resetPIDMemory(btn) {
     fetch('/api/resetPIDMemory', {
         method: 'POST', headers: {'Content-Type':'application/json'}
@@ -569,56 +821,31 @@ function resetPIDMemory(btn) {
         }
     }).catch(e => { console.error('PID memory reset error:', e); alert('Failed to reset PID memory'); });
 }
-function resetPIDSettings(btn) {
-    if (!confirm('Reset all PID settings to factory defaults?')) return;
-    fetch('/api/resetPID', {
-        method: 'POST', headers: {'Content-Type':'application/json'}
-    }).then(r=>r.json()).then(d=>{
-        if (d.status === 'ok') {
-            document.getElementById('kpInput').value = d.kp;
-            document.getElementById('kiInput').value = d.ki;
-            document.getElementById('kdInput').value = d.kd;
-            document.getElementById('targetInput').value = d.target;
-            const txt = btn.textContent;
-            btn.textContent = 'Reset Complete \u2713';
-            setTimeout(() => { btn.textContent = txt; }, 2000);
-        }
-    }).catch(e => { console.error('Reset error:', e); alert('Failed to reset PID'); });
-}
+
 function applyBrewSettings(btn) {
-    const kp = parseFloat(document.getElementById('brewKpInput').value);
-    const ki = parseFloat(document.getElementById('brewKiInput').value);
-    const kd = parseFloat(document.getElementById('brewKdInput').value);
     const boostSeconds = parseInt(document.getElementById('brewBoostSecondsInput').value);
     const boostDuty = parseInt(document.getElementById('brewBoostDutyInput').value);
     const delaySeconds = parseInt(document.getElementById('brewDelaySecondsInput').value);
     const delayDuty = parseInt(document.getElementById('brewDelayDutyInput').value);
-    if (isNaN(kp)||isNaN(ki)||isNaN(kd)||isNaN(boostSeconds)||isNaN(boostDuty)||isNaN(delaySeconds)||isNaN(delayDuty)) { alert('Invalid input'); return; }
-    if (kp<0||kp>500) { alert('Brew Kp: 0-500'); return; }
-    if (ki<0||ki>50) { alert('Brew Ki: 0-50'); return; }
-    if (kd<0||kd>2000) { alert('Brew Kd: 0-2000'); return; }
-    if (boostSeconds<0||boostSeconds>30) { alert('Boost: 0-30s'); return; }
-    if (boostDuty<0||boostDuty>100) { alert('Boost duty: 0-100%'); return; }
-    if (delaySeconds<0||delaySeconds>30) { alert('Delay: 0-30s'); return; }
-    if (delayDuty<0||delayDuty>100) { alert('Delay duty: 0-100%'); return; }
-    fetch('/api/setBrewSettings', {
+    if (isNaN(boostSeconds)||boostSeconds<0||boostSeconds>30) { alert('Boost: 0-30s'); return; }
+    if (isNaN(boostDuty)||boostDuty<0||boostDuty>100) { alert('Boost duty: 0-100%'); return; }
+    if (isNaN(delaySeconds)||delaySeconds<0||delaySeconds>30) { alert('Delay: 0-30s'); return; }
+    if (isNaN(delayDuty)||delayDuty<0||delayDuty>100) { alert('Delay duty: 0-100%'); return; }
+    fetch('/api/setBrewTiming', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp,ki,kd,boostSeconds,boostDuty,delaySeconds,delayDuty})
-    }).then(r=>r.json()).then(d=>{
+        body: JSON.stringify({boostSeconds, boostDuty, delaySeconds, delayDuty})
+    }).then(r=>r.json()).then(() => {
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
         setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
-    }).catch(e => { console.error('Brew update error:', e); alert('Failed to update brew settings'); });
+    }).catch(e => { console.error('Brew update error:', e); alert('Failed to update brew timing'); });
 }
 function resetBrewSettings(btn) {
-    if (!confirm('Reset brew settings to factory defaults?')) return;
-    fetch('/api/resetBrewSettings', {
+    if (!confirm('Reset brew timing to factory defaults?')) return;
+    fetch('/api/resetBrewTiming', {
         method: 'POST', headers: {'Content-Type':'application/json'}
     }).then(r=>r.json()).then(d=>{
         if (d.status === 'ok') {
-            document.getElementById('brewKpInput').value = d.kp;
-            document.getElementById('brewKiInput').value = d.ki;
-            document.getElementById('brewKdInput').value = d.kd;
             document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
             document.getElementById('brewBoostDutyInput').value = d.boostDuty;
             document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
@@ -627,35 +854,24 @@ function resetBrewSettings(btn) {
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
         }
-    }).catch(e => { console.error('Brew reset error:', e); alert('Failed to reset brew settings'); });
+    }).catch(e => { console.error('Brew reset error:', e); alert('Failed to reset brew timing'); });
 }
 function init() {
     console.log('Dashboard init');
-    
-    // Load current heating PID settings from ESP32
-    fetch('/api/getPID').then(r=>r.json()).then(d=>{
+    fetch('/api/getSettings').then(r=>r.json()).then(d=>{
         document.getElementById('kpInput').value = d.kp;
         document.getElementById('kiInput').value = d.ki;
         document.getElementById('kdInput').value = d.kd;
         document.getElementById('targetInput').value = d.target;
-    }).catch(e => console.error('Failed to load PID settings:', e));
-
-    // Load current brew settings from ESP32
-    fetch('/api/getBrewSettings').then(r=>r.json()).then(d=>{
-        document.getElementById('brewKpInput').value = d.kp;
-        document.getElementById('brewKiInput').value = d.ki;
-        document.getElementById('brewKdInput').value = d.kd;
+        document.getElementById('brewKpInput').value = d.brewKp;
+        document.getElementById('brewKiInput').value = d.brewKi;
+        document.getElementById('brewKdInput').value = d.brewKd;
         document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
         document.getElementById('brewBoostDutyInput').value = d.boostDuty;
         document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
         document.getElementById('brewDelayDutyInput').value = d.delayDuty;
-    }).catch(e => console.error('Failed to load brew settings:', e));
-    
+    }).catch(e => console.error('Failed to load settings:', e));
     fetchRealData(); setInterval(fetchRealData, 1000);
-    setTimeout(() => {
-        const badge = document.getElementById('statusBadge');
-        badge.textContent = 'Connected'; badge.classList.add('connected');
-    }, 2000);
 }
 window.addEventListener('load', init);
 window.dashboardAPI = {
@@ -806,79 +1022,118 @@ void handleWebServer() {
                             client.println();
                             client.println(json);
                         }
-                        else if (requestLine.indexOf("GET /api/getPID") >= 0) {
-                            // Send current PID settings
+                        else if (requestLine.indexOf("GET /api/getSettings") >= 0) {
+                            // Return all settings in one call
                             double kp, ki, kd;
                             getPIDTunings(kp, ki, kd);
-                            
+                            double bkp, bki, bkd;
+                            int bboost, bdelay, bboostDuty, bdelayDuty;
+                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
                             STATE_LOCK();
                             float setTemp = state.setTemp;
                             STATE_UNLOCK();
-                            
                             String json = "{";
                             json += "\"kp\":" + String(kp, 1) + ",";
                             json += "\"ki\":" + String(ki, 3) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
-                            json += "\"target\":" + String(setTemp, 1);
+                            json += "\"target\":" + String(setTemp, 1) + ",";
+                            json += "\"brewKp\":" + String(bkp, 1) + ",";
+                            json += "\"brewKi\":" + String(bki, 3) + ",";
+                            json += "\"brewKd\":" + String(bkd, 1) + ",";
+                            json += "\"boostSeconds\":" + String(bboost) + ",";
+                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
+                            json += "\"delaySeconds\":" + String(bdelay) + ",";
+                            json += "\"delayDuty\":" + String(bdelayDuty);
                             json += "}";
-                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
                         }
-                        else if (requestLine.indexOf("POST /api/setPID") >= 0) {
-                            // Body was already read above after headers
-                            // Expected: {"kp":62.0,"ki":1.19,"kd":713.0,"target":93.0}
-                            double kp = 0, ki = 0, kd = 0, target = 0;
-                            int kpIdx = body.indexOf("\"kp\":");
-                            int kiIdx = body.indexOf("\"ki\":");
-                            int kdIdx = body.indexOf("\"kd\":");
+                        else if (requestLine.indexOf("POST /api/setTarget") >= 0) {
+                            double target = 0;
                             int targetIdx = body.indexOf("\"target\":");
-                            
-                            if (kpIdx >= 0) kp = body.substring(kpIdx + 5).toDouble();
-                            if (kiIdx >= 0) ki = body.substring(kiIdx + 5).toDouble();
-                            if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
                             if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
-                            
-                            // Apply settings
-                            setPIDTunings(kp, ki, kd);
                             setTargetTemp(target);
-                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Target=%.1f\n", kp, ki, kd, target);
+                            Serial.printf("[WEB] Target temp set: %.1f\n", target);
                         }
-                        else if (requestLine.indexOf("POST /api/resetPID") >= 0) {
-                            // Reset PID to factory defaults
+                        else if (requestLine.indexOf("POST /api/setAllSettings") >= 0) {
+                            double kp = 0, ki = 0, kd = 0, target = 0;
+                            double bkp = 0, bki = 0, bkd = 0;
+                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
+                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
+                            int bboostDuty = DEFAULT_BREW_BOOST_DUTY_CYCLE;
+                            int bdelayDuty = DEFAULT_BREW_DELAY_DUTY_CYCLE;
+                            int kpIdx = body.indexOf("\"kp\":");
+                            int kiIdx = body.indexOf("\"ki\":");
+                            int kdIdx = body.indexOf("\"kd\":");
+                            int targetIdx = body.indexOf("\"target\":");
+                            int brewKpIdx = body.indexOf("\"brewKp\":");
+                            int brewKiIdx = body.indexOf("\"brewKi\":");
+                            int brewKdIdx = body.indexOf("\"brewKd\":");
+                            int boostIdx = body.indexOf("\"boostSeconds\":");
+                            int boostDutyIdx = body.indexOf("\"boostDuty\":");
+                            int delayIdx = body.indexOf("\"delaySeconds\":");
+                            int delayDutyIdx = body.indexOf("\"delayDuty\":");
+                            if (kpIdx >= 0) kp = body.substring(kpIdx + 5).toDouble();
+                            if (kiIdx >= 0) ki = body.substring(kiIdx + 5).toDouble();
+                            if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
+                            if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
+                            if (brewKpIdx >= 0) bkp = body.substring(brewKpIdx + 9).toDouble();
+                            if (brewKiIdx >= 0) bki = body.substring(brewKiIdx + 9).toDouble();
+                            if (brewKdIdx >= 0) bkd = body.substring(brewKdIdx + 9).toDouble();
+                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 15).toInt();
+                            if (boostDutyIdx >= 0) bboostDuty = body.substring(boostDutyIdx + 12).toInt();
+                            if (delayIdx >= 0) bdelay = body.substring(delayIdx + 15).toInt();
+                            if (delayDutyIdx >= 0) bdelayDuty = body.substring(delayDutyIdx + 12).toInt();
+                            setPIDTunings(kp, ki, kd);
+                            setTargetTemp(target);
+                            setBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println("{\"status\":\"ok\"}");
+                            Serial.printf("[WEB] All settings: Kp=%.1f Ki=%.3f Kd=%.1f T=%.1f | BKp=%.1f BKi=%.3f BKd=%.1f Boost=%ds@%d%% Delay=%ds@%d%%\n",
+                                         kp, ki, kd, target, bkp, bki, bkd, bboost, bboostDuty, bdelay, bdelayDuty);
+                        }
+                        else if (requestLine.indexOf("POST /api/resetAllSettings") >= 0) {
                             resetPIDToDefaults();
-                            
-                            // Get current values to send back
+                            resetBrewPIDToDefaults();
                             double kp, ki, kd;
                             getPIDTunings(kp, ki, kd);
-                            
                             STATE_LOCK();
                             float setTemp = state.setTemp;
                             STATE_UNLOCK();
-                            
+                            double bkp, bki, bkd;
+                            int bboost, bdelay, bboostDuty, bdelayDuty;
+                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(kp, 1) + ",";
                             json += "\"ki\":" + String(ki, 3) + ",";
                             json += "\"kd\":" + String(kd, 1) + ",";
-                            json += "\"target\":" + String(setTemp, 1);
+                            json += "\"target\":" + String(setTemp, 1) + ",";
+                            json += "\"brewKp\":" + String(bkp, 1) + ",";
+                            json += "\"brewKi\":" + String(bki, 3) + ",";
+                            json += "\"brewKd\":" + String(bkd, 1) + ",";
+                            json += "\"boostSeconds\":" + String(bboost) + ",";
+                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
+                            json += "\"delaySeconds\":" + String(bdelay) + ",";
+                            json += "\"delayDuty\":" + String(bdelayDuty);
                             json += "}";
-                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
-                            Serial.println("[WEB] PID reset to defaults");
+                            Serial.println("[WEB] All settings reset to defaults");
                         }
                         else if (requestLine.indexOf("POST /api/resetPIDMemory") >= 0) {
                             resetPIDMemory();
@@ -889,71 +1144,39 @@ void handleWebServer() {
                             client.println("{\"status\":\"ok\"}");
                             Serial.println("[WEB] PID memory reset (integral zeroed)");
                         }
-                        else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
+                        else if (requestLine.indexOf("POST /api/setBrewTiming") >= 0) {
+                            // Preserve existing brew PID tunings, update only timing
                             double bkp, bki, bkd;
                             int bboost, bdelay, bboostDuty, bdelayDuty;
                             getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            
-                            String json = "{";
-                            json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 3) + ",";
-                            json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"boostSeconds\":" + String(bboost) + ",";
-                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
-                            json += "\"delaySeconds\":" + String(bdelay) + ",";
-                            json += "\"delayDuty\":" + String(bdelayDuty);
-                            json += "}";
-                            
-                            client.println("HTTP/1.1 200 OK");
-                            client.println("Content-Type: application/json");
-                            client.println("Connection: close");
-                            client.println();
-                            client.println(json);
-                        }
-                        else if (requestLine.indexOf("POST /api/setBrewSettings") >= 0) {
-                            double bkp = 0, bki = 0, bkd = 0;
-                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
-                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
-                            int bboostDuty = DEFAULT_BREW_BOOST_DUTY_CYCLE;
-                            int bdelayDuty = DEFAULT_BREW_DELAY_DUTY_CYCLE;
-                            int kpIdx = body.indexOf("\"kp\":");
-                            int kiIdx = body.indexOf("\"ki\":");
-                            int kdIdx = body.indexOf("\"kd\":");
                             int boostIdx = body.indexOf("\"boostSeconds\":");
                             int boostDutyIdx = body.indexOf("\"boostDuty\":");
                             int delayIdx = body.indexOf("\"delaySeconds\":");
                             int delayDutyIdx = body.indexOf("\"delayDuty\":");
-                            
-                            if (kpIdx >= 0) bkp = body.substring(kpIdx + 5).toDouble();
-                            if (kiIdx >= 0) bki = body.substring(kiIdx + 5).toDouble();
-                            if (kdIdx >= 0) bkd = body.substring(kdIdx + 5).toDouble();
                             if (boostIdx >= 0) bboost = body.substring(boostIdx + 15).toInt();
                             if (boostDutyIdx >= 0) bboostDuty = body.substring(boostDutyIdx + 12).toInt();
                             if (delayIdx >= 0) bdelay = body.substring(delayIdx + 15).toInt();
                             if (delayDutyIdx >= 0) bdelayDuty = body.substring(delayDutyIdx + 12).toInt();
-                            
                             setBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Boost=%ds@%d%%, Delay=%ds@%d%%\n",
-                                         bkp, bki, bkd, bboost, bboostDuty, bdelay, bdelayDuty);
+                            Serial.printf("[WEB] Brew timing updated: Boost=%ds@%d%%, Delay=%ds@%d%%\n",
+                                         bboost, bboostDuty, bdelay, bdelayDuty);
                         }
-                        else if (requestLine.indexOf("POST /api/resetBrewSettings") >= 0) {
-                            resetBrewPIDToDefaults();
-                            
+                        else if (requestLine.indexOf("POST /api/resetBrewTiming") >= 0) {
+                            // Preserve existing brew PID tunings, reset only timing
                             double bkp, bki, bkd;
                             int bboost, bdelay, bboostDuty, bdelayDuty;
                             getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            
+                            setBrewPIDTunings(bkp, bki, bkd,
+                                             DEFAULT_BREW_BOOST_SECONDS, DEFAULT_BREW_DELAY_SECONDS,
+                                             DEFAULT_BREW_BOOST_DUTY_CYCLE, DEFAULT_BREW_DELAY_DUTY_CYCLE);
+                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
                             String json = "{";
                             json += "\"status\":\"ok\",";
-                            json += "\"kp\":" + String(bkp, 1) + ",";
-                            json += "\"ki\":" + String(bki, 3) + ",";
-                            json += "\"kd\":" + String(bkd, 1) + ",";
                             json += "\"boostSeconds\":" + String(bboost) + ",";
                             json += "\"boostDuty\":" + String(bboostDuty) + ",";
                             json += "\"delaySeconds\":" + String(bdelay) + ",";
@@ -964,7 +1187,7 @@ void handleWebServer() {
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
-                            Serial.println("[WEB] Brew settings reset to defaults");
+                            Serial.println("[WEB] Brew timing reset to defaults");
                         }
                         else if (requestLine.indexOf("POST /api/setRelayForce") >= 0) {
                             bool forceOff = body.indexOf("\"forceOff\":true") >= 0;
