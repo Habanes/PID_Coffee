@@ -166,6 +166,16 @@ void updatePID() {
         Serial.println("[CONTROLS] Emergency stop cleared - temperature safe");
     }
 
+    // GUI emergency off: zero duty cycle immediately and skip PID computation
+    if (relayForceOff) {
+        pidOutput = 0;
+        pidOutputISR = 0;
+        STATE_LOCK();
+        state.pidOutput = 0;
+        STATE_UNLOCK();
+        return;
+    }
+
     // --- BREW MODE TRANSITION LOGIC ---
     if (brewMode && brewPhase == BREW_PHASE_NONE) {
         // Brew mode just activated: start boost phase
