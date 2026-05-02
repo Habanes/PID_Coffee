@@ -1,5 +1,6 @@
 #include "Controls.h"
 #include "State.h"
+#include "Buzzer.h"
 #include <PID_v1.h>
 #include <Preferences.h>
 
@@ -97,31 +98,41 @@ void IRAM_ATTR onPIDTimer() {
 
 void setupControls() {
     // Setup Relay Pin
+    Serial.printf("[CONTROLS] Setting up relay: GPIO%d\n", RELAY_PIN);
     pinMode(RELAY_PIN, OUTPUT);
     digitalWrite(RELAY_PIN, LOW);
+    Serial.println("[CONTROLS] Relay pin LOW (safe)");
     
     // Configure PID Controller
     pidSetpoint = state.setTemp;  // Already loaded from storage
+    Serial.printf("[CONTROLS] PID setpoint: %.1f°C\n", pidSetpoint);
+    Serial.printf("[CONTROLS] Configuring PID: Kp=%.2f Ki=%.3f Kd=%.1f IMax=%.1f EMA=%.2f\n",
+                  Kp, Ki, Kd, IMax, emaFactor);
     myPID.SetSampleTime(windowSize);
     myPID.SetOutputLimits(0, windowSize);
     myPID.SetIntegratorLimits(0, IMax);
     myPID.SetSmoothingFactor(emaFactor);
     myPID.SetMode(AUTOMATIC);
     myPID.SetTunings(Kp, Ki, Kd, 1);
+    Serial.println("[CONTROLS] PID configured");
     
     // Setup Hardware Timer (1MHz base, 100Hz alarm)
+    Serial.printf("[CONTROLS] Starting hardware timer (interval=%dms)...\n", PID_TIMER_INTERVAL_MS);
     pidTimer = timerBegin(1000000);
     if (pidTimer == NULL) {
         Serial.println("[CONTROLS] ERROR: Failed to create timer!");
         return;
     }
+    Serial.printf("[CONTROLS] Timer handle: %p — attaching ISR\n", (void*)pidTimer);
     timerAttachInterrupt(pidTimer, &onPIDTimer);
     timerAlarm(pidTimer, PID_TIMER_INTERVAL_MS * 1000UL, true, 0);
+    Serial.println("[CONTROLS] Timer alarm set — waiting 100ms to verify ISR fires...");
     
     // Verify timer is ticking
     vTaskDelay(100 / portTICK_PERIOD_MS);
     if (isrTickCount > 0) {
-        Serial.printf("[CONTROLS] Ready | Kp=%.1f Ki=%.3f Kd=%.1f | Setpoint=%.1f°C\n", Kp, Ki, Kd, pidSetpoint);
+        Serial.printf("[CONTROLS] Ready | ISR count=%lu | Kp=%.1f Ki=%.3f Kd=%.1f | Setpoint=%.1f°C\n",
+                      isrTickCount, Kp, Ki, Kd, pidSetpoint);
     } else {
         Serial.println("[CONTROLS] WARNING: Timer ISR not executing!");
     }
@@ -410,7 +421,9 @@ bool isEmergencyStopActive() {
  * If no values are stored, defaults from Controls.h are used.
  */
 void loadPIDFromStorage() {
-    preferences.begin("coffee-pid", true); // Read-only mode
+    Serial.println("[STORAGE] Opening NVS namespace 'coffee-pid'...");
+    bool opened = preferences.begin("coffee-pid", true); // Read-only mode
+    Serial.printf("[STORAGE] NVS open: %s\n", opened ? "OK" : "FAILED (will use defaults)");
     
     // Load PID tunings (use defaults if not found)
     Kp = preferences.getDouble("Kp", DEFAULT_KP);
@@ -431,6 +444,7 @@ void loadPIDFromStorage() {
     brewDelaySeconds = preferences.getInt("brewDelay", DEFAULT_BREW_DELAY_SECONDS);
     brewBoostDutyCycle = preferences.getInt("brewBoostDuty", DEFAULT_BREW_BOOST_DUTY_CYCLE);
     brewDelayDutyCycle = preferences.getInt("brewDelayDuty", DEFAULT_BREW_DELAY_DUTY_CYCLE);
+    setBuzzerMute(preferences.getBool("buzzerMute", BUZZER_MUTE));
     
     preferences.end();
     Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f\u00b0C | Brew boost=%ds@%d%%, delay=%ds@%d%%\n",
@@ -451,6 +465,7 @@ void savePIDToStorage() {
     preferences.putDouble("IMax", IMax);
     preferences.putDouble("emaFactor", emaFactor);
     preferences.putDouble("targetTemp", state.setTemp);
+    preferences.putBool("buzzerMute", getBuzzerMute());
     
     preferences.end();
 }

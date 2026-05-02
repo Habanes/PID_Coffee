@@ -6,6 +6,7 @@
 #include "WebServer.h"
 #include "State.h"
 #include "Controls.h"
+#include "Buzzer.h"
 #include <WiFi.h>
 
 // Web Server
@@ -162,6 +163,15 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <button class="btn-brew" onclick="applyBrewSettings(this)" style="flex: 1;">Apply Timing</button>
                     <button class="btn-reset" onclick="resetBrewSettings(this)" style="flex: 1;">Reset Defaults</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- Buzzer -->
+        <div class="card">
+            <div class="card-title">Buzzer</div>
+            <div class="temp-control-row">
+                <span style="flex:1; color:#b6926e;">Mute all buzzer sounds</span>
+                <button class="btn-emergency" id="buzzerMuteBtn" onclick="toggleBuzzerMute()">Mute</button>
             </div>
         </div>
 
@@ -732,6 +742,22 @@ function updateRelayForceBtn(forceOff) {
         btn.textContent = 'Emergency Off';
     }
 }
+function updateBuzzerMuteBtn(muted) {
+    const btn = document.getElementById('buzzerMuteBtn');
+    if (!btn) return;
+    if (muted) { btn.classList.add('forced-off'); btn.textContent = 'Mute [ON]'; }
+    else { btn.classList.remove('forced-off'); btn.textContent = 'Mute'; }
+}
+function toggleBuzzerMute() {
+    const btn = document.getElementById('buzzerMuteBtn');
+    const currentlyMuted = btn.classList.contains('forced-off');
+    fetch('/api/setBuzzerMute', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({muted: !currentlyMuted})
+    }).then(r => r.json()).then(d => {
+        updateBuzzerMuteBtn(d.muted);
+    }).catch(e => { console.error('Buzzer mute error:', e); alert('Failed to toggle buzzer mute'); });
+}
 function toggleRelayForceOff() {
     const btn = document.getElementById('relayForceOffBtn');
     const currentlyForced = btn.classList.contains('forced-off');
@@ -870,6 +896,7 @@ function init() {
         document.getElementById('brewBoostDutyInput').value = d.boostDuty;
         document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
         document.getElementById('brewDelayDutyInput').value = d.delayDuty;
+        updateBuzzerMuteBtn(d.buzzerMute);
     }).catch(e => console.error('Failed to load settings:', e));
     fetchRealData(); setInterval(fetchRealData, 1000);
 }
@@ -913,6 +940,7 @@ void sendResponse(WiFiClient &client, const char* content, const char* contentTy
  * Tries to connect to home WiFi first, falls back to AP mode if it fails
  */
 void setupWebServer() {
+    Serial.printf("[WEB] Setting WiFi mode to STA, connecting to '%s'...\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     
@@ -920,11 +948,13 @@ void setupWebServer() {
     while (WiFi.status() != WL_CONNECTED && attempts < WIFI_CONNECT_ATTEMPTS) {
         delay(WIFI_CONNECT_DELAY_MS);
         attempts++;
+        Serial.printf("[WEB] WiFi attempt %d/%d — status=%d\n", attempts, WIFI_CONNECT_ATTEMPTS, (int)WiFi.status());
     }
     
     if (WiFi.status() == WL_CONNECTED) {
         Serial.printf("[WEB] Connected to %s | http://%s\n", WIFI_SSID, WiFi.localIP().toString().c_str());
     } else {
+        Serial.printf("[WEB] STA failed after %d attempts — switching to AP mode\n", attempts);
         WiFi.mode(WIFI_AP);
         WiFi.softAP(AP_SSID, AP_PASSWORD);
         delay(100);
@@ -932,6 +962,7 @@ void setupWebServer() {
     }
     
     server.begin();
+    Serial.printf("[WEB] HTTP server started on port %d\n", WEBSERVER_PORT);
 }
 
 /**
@@ -951,16 +982,34 @@ String getIPAddress() {
  * @brief Handle incoming web requests
  */
 void handleWebServer() {
+    // Heartbeat: confirm the loop is running (every 5 seconds)
+    static unsigned long lastHeartbeat = 0;
+    static unsigned long callCount = 0;
+    callCount++;
+    if (millis() - lastHeartbeat > 5000) {
+        Serial.printf("[WEB] Alive — %lu calls/5s | heap=%u | WiFi=%d\n",
+                      callCount, ESP.getFreeHeap(), (int)WiFi.status());
+        callCount = 0;
+        lastHeartbeat = millis();
+    }
+
     WiFiClient client = server.available();
     
     if (client) {
+        Serial.printf("[WEB] Client connected from %s\n", client.remoteIP().toString().c_str());
         String requestLine = "";
         String currentLine = "";
         bool isFirstLine = true;
         int contentLength = 0;
         
+        unsigned long clientTimeout = millis();
         while (client.connected()) {
+            if (millis() - clientTimeout > 3000) {
+                Serial.println("[WEB] Client timeout - closing");
+                break;
+            }
             if (client.available()) {
+                clientTimeout = millis(); // reset timeout on data
                 char c = client.read();
                 
                 if (c == '\n') {
@@ -1043,13 +1092,28 @@ void handleWebServer() {
                             json += "\"boostSeconds\":" + String(bboost) + ",";
                             json += "\"boostDuty\":" + String(bboostDuty) + ",";
                             json += "\"delaySeconds\":" + String(bdelay) + ",";
-                            json += "\"delayDuty\":" + String(bdelayDuty);
+                            json += "\"delayDuty\":" + String(bdelayDuty) + ",";
+                            json += "\"buzzerMute\":" + String(getBuzzerMute() ? "true" : "false");
                             json += "}";
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println(json);
+                        }
+                        else if (requestLine.indexOf("POST /api/setBuzzerMute") >= 0) {
+                            bool muted = body.indexOf("\"muted\":true") >= 0;
+                            setBuzzerMute(muted);
+                            savePIDToStorage();
+                            String json = "{\"status\":\"ok\",\"muted\":";
+                            json += muted ? "true" : "false";
+                            json += "}";
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.printf("[WEB] Buzzer mute: %s\n", muted ? "ON" : "OFF");
                         }
                         else if (requestLine.indexOf("POST /api/setTarget") >= 0) {
                             double target = 0;
@@ -1219,10 +1283,17 @@ void handleWebServer() {
                 } else if (c != '\r') {
                     currentLine += c;
                 }
+            } else {
+                // No data yet — yield so the lwIP/WiFi tasks on Core 0 can run
+                vTaskDelay(1 / portTICK_PERIOD_MS);
             }
         }
         
-        vTaskDelay(1 / portTICK_PERIOD_MS);
+        // Flush TCP send buffer so all response bytes leave before we close
+        client.flush();
+        vTaskDelay(10 / portTICK_PERIOD_MS);
         client.stop();
+        Serial.printf("[WEB] Client done | heap=%u | stack_hwm=%u\n",
+                      ESP.getFreeHeap(), uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t));
     }
 }

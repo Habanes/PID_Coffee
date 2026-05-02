@@ -19,8 +19,9 @@
 // Brew button (active LOW, internal pull-up)
 #define PIN_BREW                2
 
-// Buzzer (reserved, not currently used)
+// Buzzer
 #define BUZZER_PIN              47
+#define BUZZER_MUTE             true    // Set true to silence all buzzer output
 
 // 7-Segment display — digit enable pins (common anode, active HIGH)
 #define PIN_DISP_DIGIT1         3

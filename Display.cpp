@@ -1,6 +1,8 @@
 #include "Display.h"
 #include "State.h"
 #include "WebServer.h"
+#include "Controls.h"
+#include "Buzzer.h"
 
 // Create the library object
 SevSeg sevseg;
@@ -84,6 +86,9 @@ void refreshDisplay() {
         float sensitivity = state.tempSensitivity;
         bool brewMode = state.brewMode;
         STATE_UNLOCK();
+
+        // Siren when emergency stop is active
+        updateSiren(isEmergencyStopActive());
 
         // Brew mode override: show current temp with fast-blinking 'b' (5 Hz)
         // This overrides all other display modes so you can always tell at a glance.

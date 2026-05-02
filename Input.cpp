@@ -1,6 +1,7 @@
 #include "Input.h"
 #include "State.h"
 #include "Controls.h"
+#include "Buzzer.h"
 #include <RotaryEncoder.h>
 
 // --- LIBRARY SETUP ---
@@ -14,14 +15,22 @@ void IRAM_ATTR checkPosition() {
 
 void setupInput() {
   // 1. Setup Rotary Pins (The library handles pinMode internally, but interrupts need this)
+  Serial.printf("[INPUT] Attaching encoder ISR: PIN_IN1=GPIO%d, PIN_IN2=GPIO%d\n", PIN_IN1, PIN_IN2);
   attachInterrupt(digitalPinToInterrupt(PIN_IN1), checkPosition, CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_IN2), checkPosition, CHANGE);
+  Serial.println("[INPUT] Encoder interrupts attached");
 
   // 2. Setup Button Pin
+  Serial.printf("[INPUT] Setting up button: PIN_BTN=GPIO%d\n", PIN_BTN);
   pinMode(PIN_BTN, INPUT_PULLUP); // Button connects to Ground when pressed
+  Serial.printf("[INPUT] BTN initial state: %s\n", digitalRead(PIN_BTN) == HIGH ? "HIGH (not pressed)" : "LOW (pressed/short?)");
 
   // 3. Setup Brew Button (active LOW, internal pull-up)
+  Serial.printf("[INPUT] Setting up brew button: PIN_BREW=GPIO%d\n", PIN_BREW);
   pinMode(PIN_BREW, INPUT_PULLUP);
+  Serial.printf("[INPUT] BREW initial state: %s\n", digitalRead(PIN_BREW) == HIGH ? "HIGH (not pressed)" : "LOW (pressed/short?)");
+
+  Serial.println("[INPUT] Setup complete");
 }
 
 void syncInputState() {
@@ -55,6 +64,8 @@ void syncInputState() {
       STATE_LOCK();
       state.setTemp = setTemp;
       STATE_UNLOCK();
+
+      playEncoderTick(); // Audible feedback per step
     }
 
     // Update the previous position so we don't print again until it moves
@@ -78,6 +89,7 @@ void syncInputState() {
         // Button just pressed - record the time and reset long press flag
         btnPressTime = millis();
         longPressTriggered = false;
+        playButtonClick(); // Immediate press feedback
       } else {
         // Button just released - check how long it was pressed
         unsigned long pressDuration = millis() - btnPressTime;
@@ -128,6 +140,7 @@ void syncInputState() {
         Serial.printf("→ Sensitivity: %.1f°C (long press)\n", newSensitivity);
       }
       longPressTriggered = true; // Prevent multiple triggers
+      playLongPress(); // Audible confirmation of sensitivity toggle
     }
   }
 
@@ -146,6 +159,7 @@ void syncInputState() {
         STATE_UNLOCK();
 
         setBrewMode(newBrewMode);
+        playBrewToggle(); // Audible brew mode feedback
       }
       lastBrewBtnTime = millis();
       lastBrewBtnState = currBrewBtn;
