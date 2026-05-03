@@ -25,10 +25,10 @@ void setupInput() {
   pinMode(PIN_BTN, INPUT_PULLUP); // Button connects to Ground when pressed
   Serial.printf("[INPUT] BTN initial state: %s\n", digitalRead(PIN_BTN) == HIGH ? "HIGH (not pressed)" : "LOW (pressed/short?)");
 
-  // 3. Setup Brew Button (active LOW, internal pull-up)
-  Serial.printf("[INPUT] Setting up brew button: PIN_BREW=GPIO%d\n", PIN_BREW);
-  pinMode(PIN_BREW, INPUT_PULLUP);
-  Serial.printf("[INPUT] BREW initial state: %s\n", digitalRead(PIN_BREW) == HIGH ? "HIGH (not pressed)" : "LOW (pressed/short?)");
+  // 3. Setup switch ADC pin (voltage divider ladder: SW_STEAM + SW_COFFEE on one pin)
+  Serial.printf("[INPUT] Setting up switch ADC: PIN_SWITCHES=GPIO%d\n", PIN_SWITCHES);
+  analogSetPinAttenuation(PIN_SWITCHES, ADC_11db); // Full 0-3.3V range
+  Serial.printf("[INPUT] Switch ADC initial read: %d\n", analogRead(PIN_SWITCHES));
 
   Serial.println("[INPUT] Setup complete");
 }
@@ -144,25 +144,27 @@ void syncInputState() {
     }
   }
 
-  // --- 3. HANDLE BREW BUTTON (GPIO 0) ---
-  // Toggle brew mode on each press. Active LOW (internal pull-up).
-  static bool lastBrewBtnState = HIGH;
-  static unsigned long lastBrewBtnTime = 0;
-  bool currBrewBtn = digitalRead(PIN_BREW);
+  // --- 3. HANDLE SWITCH INPUTS (voltage divider ADC on PIN_SWITCHES) ---
+  // Ladder: R_steam=10kΩ, R_coffee=5.1kΩ, R_pd=5.1kΩ to GND; source=5V opto outputs
+  // ADC bands: BOTH(0-631), COFFEE(632-1867), STEAM(1868-3103), NEITHER(3104-4095)
+  int adcVal = analogRead(PIN_SWITCHES);
+  bool swSteam, swCoffee;
 
-  if (currBrewBtn != lastBrewBtnState) {
-    if (millis() - lastBrewBtnTime > BTN_DEBOUNCE_MS) { // debounce
-      if (currBrewBtn == LOW) {
-        // Toggling on press (not release) for instant feedback
-        STATE_LOCK();
-        bool newBrewMode = !state.brewMode;
-        STATE_UNLOCK();
-
-        setBrewMode(newBrewMode);
-        playBrewToggle(); // Audible brew mode feedback
-      }
-      lastBrewBtnTime = millis();
-      lastBrewBtnState = currBrewBtn;
-    }
+  if (adcVal <= SWITCH_ADC_BOTH_MAX) {
+    swSteam = true;  swCoffee = true;   // Both optos conducting
+  } else if (adcVal <= SWITCH_ADC_COFFEE_MAX) {
+    swSteam = false; swCoffee = true;   // Coffee opto only
+  } else if (adcVal <= SWITCH_ADC_STEAM_MAX) {
+    swSteam = true;  swCoffee = false;  // Steam opto only
+  } else {
+    swSteam = false; swCoffee = false;  // Neither
   }
+
+  float switchVoltage = adcVal * (3.3f / 4095.0f);
+
+  STATE_LOCK();
+  state.swSteam       = swSteam;
+  state.swCoffee      = swCoffee;
+  state.switchVoltage = switchVoltage;
+  STATE_UNLOCK();
 }

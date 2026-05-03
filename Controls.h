@@ -16,13 +16,18 @@ void setTargetTemp(double temp);
 bool isEmergencyStopActive();
 void resetPIDMemory();  // Zero integral accumulator without changing tunings
 
-// Brew mode API
-void setBrewMode(bool active);
-bool isBrewModeActive();
-bool isBrewBoostPhase();  // True during the boost phase (heater at boost duty cycle)
-bool isBrewDelayPhase();  // True during the delay phase (heater at delay duty cycle)
-void setBrewPIDTunings(double kp, double ki, double kd, int boostSeconds, int delaySeconds, int boostDutyCycle, int delayDutyCycle);
-void getBrewPIDTunings(double &kp, double &ki, double &kd, int &boostSeconds, int &delaySeconds, int &boostDutyCycle, int &delayDutyCycle);
+// Heater output mode — set by state machine, consumed by ISR
+enum HeaterMode { HEATER_OFF, HEATER_FULL_ON, HEATER_PID };
+void setHeaterOutput(HeaterMode mode);
+
+// Pump and valve outputs (active HIGH — low-side transistors, 5V load)
+void setPump(bool on);
+void setValve(bool on);
+
+// Brew PID API (tunings only — timing handled by state machine constants)
+void setBrewPIDActive(bool active);  // Switch between heating and brew PID tunings
+void setBrewPIDTunings(double kp, double ki, double kd);
+void getBrewPIDTunings(double &kp, double &ki, double &kd);
 void resetBrewPIDToDefaults();
 void saveBrewSettingsToStorage();
 

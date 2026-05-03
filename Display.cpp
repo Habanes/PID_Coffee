@@ -10,7 +10,9 @@ SevSeg sevseg;
 // Custom character definitions for mode indicators
 const byte CHAR_C = 0b00111001; // 'C' for Current mode
 const byte CHAR_S = 0b01101101; // 'S' for Set mode
-const byte CHAR_B = 0b01111100; // 'b' for brew mode indicator
+const byte CHAR_B = 0b01111100; // 'b' for brew / COFFEE state
+const byte CHAR_E = 0b01111001; // 'E' for ERROR state
+const byte CHAR_DASH = 0b01000000; // '-' for STEAM (hardware has control)
 
 // Segment patterns for digits 0-9 (shared across all display modes)
 static const byte digitSegments[10] = {
@@ -80,22 +82,46 @@ void refreshDisplay() {
         
         // Read state once with mutex protection
         STATE_LOCK();
-        DisplayMode mode = state.displayMode;
-        float currentTemp = state.currentTemp;
-        float setTemp = state.setTemp;
-        float sensitivity = state.tempSensitivity;
-        bool brewMode = state.brewMode;
+        DisplayMode    mode        = state.displayMode;
+        float          currentTemp = state.currentTemp;
+        float          setTemp     = state.setTemp;
+        float          sensitivity = state.tempSensitivity;
+        MachineState   machState   = state.machineState;
         STATE_UNLOCK();
 
         // Siren when emergency stop is active
         updateSiren(isEmergencyStopActive());
 
-        // Brew mode override: show current temp with fast-blinking 'b' (5 Hz)
-        // This overrides all other display modes so you can always tell at a glance.
-        if (brewMode) {
-            static bool brewBlink = false;
-            brewBlink = !brewBlink; // Toggle every 100ms → 5 Hz blink
+        // STATE_COFFEE: blink 'b' at 1Hz using DISPLAY_BLINK_CYCLE_MS
+        if (machState == STATE_COFFEE) {
+            static unsigned long lastBrewBlink = 0;
+            static bool brewBlink = true;
+            if (millis() - lastBrewBlink >= DISPLAY_BLINK_CYCLE_MS) {
+                brewBlink = !brewBlink;
+                lastBrewBlink = millis();
+            }
             setTempWithMode(currentTemp, brewBlink ? CHAR_B : 0x00);
+            lastUpdate = millis();
+            return;
+        }
+
+        // STATE_STEAM: hardware has control — show '----'
+        if (machState == STATE_STEAM) {
+            byte segs[4] = {CHAR_DASH, CHAR_DASH, CHAR_DASH, CHAR_DASH};
+            sevseg.setSegments(segs);
+            lastUpdate = millis();
+            return;
+        }
+
+        // STATE_ERROR: blink 'E' at 1Hz using DISPLAY_BLINK_CYCLE_MS
+        if (machState == STATE_ERROR) {
+            static unsigned long lastErrBlink = 0;
+            static bool errBlink = true;
+            if (millis() - lastErrBlink >= DISPLAY_BLINK_CYCLE_MS) {
+                errBlink = !errBlink;
+                lastErrBlink = millis();
+            }
+            setTempWithMode(currentTemp, errBlink ? CHAR_E : 0x00);
             lastUpdate = millis();
             return;
         }
@@ -171,10 +197,7 @@ void refreshDisplay() {
                         // Convert IP to character array for display
                         // e.g., "192.168.1.100" - we'll show 4 chars at a time
                         byte segments[4] = {0, 0, 0, 0};
-                        
-                        // Digit lookup table
-                        const byte CHAR_DASH = 0b01000000; // '-' for dot separator
-                        
+
                         // Show 4 characters at a time from IP string
                         for (int i = 0; i < 4; i++) {
                             int charPos = ipCharIndex + i;

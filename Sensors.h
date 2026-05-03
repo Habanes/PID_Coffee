@@ -7,5 +7,7 @@
 
 void setupSensors();
 void readTemperature();
+void readPressure(); // ADC on PIN_PRESSURE — stubbed to 0.0 Bar until transducer is wired
+bool isSensorTimedOut(); // true if no valid reading received for SENSOR_TIMEOUT_MS
 
 #endif

@@ -1,0 +1,143 @@
+// ==========================================
+// CONSTANTS & PARAMETERS
+// ==========================================
+// Safety Limits (Absolute Machine Cutoffs)
+const SAFE_TEMP_MAX = 150.0        // Max physical temp before ERROR (Celsius)
+const SAFE_PRESSURE_MAX = 14.0     // Max pressure before ERROR (Bar)
+
+// Brew Interlocks
+const BREW_MAX_TEMP = 98.0         // Prevent entering COFFEE if block is too hot (Celsius)
+
+// Sequence Timers & Thresholds
+const PREINFUSE_MAX_TIME = 5.0     // Max time to attempt pre-infusion (Seconds)
+const PREINFUSE_TARGET_PRESS = 2.5 // Pressure target to end pre-infusion early (Bar)
+const BLOOM_TIME = 3.0             // Duration to soak puck (Seconds)
+const PREHEAT_TIME = 0.5           // Quick burst of heat before pump kicks in (Seconds)
+const BREW_MAX_TIME = 2.0          // Pump on + 100% heat to counter temp dip (Seconds)
+const BREW_PID_MAX_TIME = 45.0     // Max duration of the actual PID brew phase (Seconds)
+
+
+// ==========================================
+// I/O & STATES
+// ==========================================
+// Inputs
+input SW_STEAM            // Optocoupler (0/1)
+input SW_COFFEE           // Optocoupler (0/1)
+input CURRENT_TEMP        // Sensor (Celsius)
+input CURRENT_PRESSURE    // Transducer (Bar)
+
+// Outputs
+output SSR_HEATING        // SSR (PWM 0-100%)
+output SSR_PUMP           // SSR (0 = OFF, 1 = ON)
+output SSR_VALVE          // SSR (0 = OFF / Drain, 1 = ON / Brew Group)
+
+// Main States
+state IDLE                // Power on reset state
+state COFFEE              // Brew sequence active
+state STEAM               // Steam hardware override active
+state ERROR               // Safety lock-out
+
+// Coffee Substates (Only active when in state COFFEE)
+state COFFEE_PREINFUSE
+state COFFEE_BLOOM
+state COFFEE_PREHEAT
+state COFFEE_BREW_MAX
+state COFFEE_BREW_PID
+state COFFEE_DONE
+
+// ==========================================
+// TRANSITION LOGIC
+// ==========================================
+power on reset → IDLE
+
+WHEN IDLE:
+  IF SW_STEAM AND SW_COFFEE → ERROR
+  IF SW_STEAM AND NOT SW_COFFEE → STEAM
+  // Interlock: Only allow COFFEE if block has cooled down below steam temps
+  IF NOT SW_STEAM AND SW_COFFEE:
+      IF CURRENT_TEMP <= BREW_MAX_TEMP → COFFEE (Starts at COFFEE_PREINFUSE)
+      ELSE → IDLE // Wait for machine to cool down
+  IF CURRENT_PRESSURE > SAFE_PRESSURE_MAX OR CURRENT_TEMP > SAFE_TEMP_MAX → ERROR
+
+WHEN COFFEE:
+  IF NOT SW_STEAM AND NOT SW_COFFEE → IDLE
+  IF SW_STEAM AND NOT SW_COFFEE → STEAM
+  IF SW_STEAM AND SW_COFFEE → ERROR
+  IF CURRENT_PRESSURE > SAFE_PRESSURE_MAX OR CURRENT_TEMP > SAFE_TEMP_MAX → ERROR
+
+  // Internal COFFEE Substate Transitions:
+  IF substate == COFFEE_PREINFUSE:
+      IF (CURRENT_PRESSURE >= PREINFUSE_TARGET_PRESS) OR (time_in_state >= PREINFUSE_MAX_TIME) → COFFEE_BLOOM
+  
+  IF substate == COFFEE_BLOOM:
+      IF time_in_state >= BLOOM_TIME → COFFEE_PREHEAT
+  
+  IF substate == COFFEE_PREHEAT:
+      IF time_in_state >= PREHEAT_TIME → COFFEE_BREW_MAX
+  
+  IF substate == COFFEE_BREW_MAX:
+      IF time_in_state >= BREW_MAX_TIME → COFFEE_BREW_PID
+
+  IF substate == COFFEE_BREW_PID:
+      IF time_in_state >= BREW_PID_MAX_TIME → COFFEE_DONE
+
+WHEN STEAM:
+  IF NOT SW_STEAM AND NOT SW_COFFEE → IDLE
+  IF NOT SW_STEAM AND SW_COFFEE → IDLE // Will drop to IDLE until temp < BREW_MAX_TEMP
+  IF SW_STEAM AND SW_COFFEE → ERROR
+  IF CURRENT_PRESSURE > SAFE_PRESSURE_MAX OR CURRENT_TEMP > SAFE_TEMP_MAX → ERROR
+
+WHEN ERROR:
+  // Forced acknowledgment: User must turn both switches OFF and machine must be safe
+  IF SW_STEAM OR SW_COFFEE → ERROR 
+  IF CURRENT_PRESSURE <= SAFE_PRESSURE_MAX AND CURRENT_TEMP <= SAFE_TEMP_MAX AND NOT SW_STEAM AND NOT SW_COFFEE → IDLE
+
+
+// ==========================================
+// OUTPUT LOGIC
+// ==========================================
+WHEN IDLE:
+  SSR_HEATING → PID control (Target: Brew Idle Temp)
+  SSR_PUMP    → OFF
+  SSR_VALVE   → OFF
+
+WHEN STEAM:
+  SSR_HEATING → 0% (Hardware steam thermostat assumes control)
+  SSR_PUMP    → ON (Hardware pulsor board assumes control)
+  SSR_VALVE   → ON (Routes pulsing water to block)
+
+WHEN ERROR:
+  SSR_HEATING → 0%
+  SSR_PUMP    → OFF
+  SSR_VALVE   → OFF (Vents pressure)
+
+WHEN COFFEE:
+  IF substate == COFFEE_PREINFUSE:
+      SSR_HEATING → PID control
+      SSR_PUMP    → ON
+      SSR_VALVE   → ON
+
+  IF substate == COFFEE_BLOOM:
+      SSR_HEATING → PID control
+      SSR_PUMP    → OFF
+      SSR_VALVE   → ON (CRITICAL: Must stay on to hold pressure)
+
+  IF substate == COFFEE_PREHEAT:
+      SSR_HEATING → 100%
+      SSR_PUMP    → OFF
+      SSR_VALVE   → ON
+
+  IF substate == COFFEE_BREW_MAX:
+      SSR_HEATING → 100%
+      SSR_PUMP    → ON
+      SSR_VALVE   → ON
+
+  IF substate == COFFEE_BREW_PID:
+      SSR_HEATING → PID control
+      SSR_PUMP    → ON
+      SSR_VALVE   → ON
+
+  IF substate == COFFEE_DONE:
+      SSR_HEATING → 0% // Or PID Idle Temp
+      SSR_PUMP    → OFF
+      SSR_VALVE   → OFF (Relieves puck pressure into drip tray)

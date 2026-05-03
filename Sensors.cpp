@@ -1,6 +1,7 @@
 #include "Sensors.h"
 #include "State.h"
 #include <TSIC.h>  // TSIC library for ZACWire protocol
+#include <Arduino.h>
 
 // Instantiate the TSIC 306 sensor
 // TSIC(SignalPin, VCCpin, SensorType)
@@ -10,9 +11,21 @@ TSIC tempSensor(TSIC_SIGNAL_PIN, NO_VCC_PIN, TSIC_30x);
 // Last valid filtered temperature (EMA-smoothed); seeded at room temperature
 float filteredTemp = SENSOR_EMA_SEED_TEMP;
 
+// Timestamp of the last valid temperature reading; used for sensor timeout detection
+static unsigned long lastValidReadingMillis = 0;
+
+bool isSensorTimedOut() {
+    return (millis() - lastValidReadingMillis) > SENSOR_TIMEOUT_MS;
+}
+
 void setupSensors() {
+    lastValidReadingMillis = millis(); // Arm the timer from startup, not from epoch 0
+    // ADC_11db attenuation gives full 0–3.3V input range on this pin
+    analogSetPinAttenuation(PIN_PRESSURE, ADC_11db);
     Serial.printf("[SENSORS] TSIC 306 ready (GPIO %d, EMA=%.1f, range %.0f-%.0f°C)\n",
                   TSIC_SIGNAL_PIN, (float)EMA_ALPHA, (float)TEMP_MIN_VALID, (float)TEMP_MAX_VALID);
+    Serial.printf("[SENSORS] Pressure input on GPIO %d (divider R1=2.2k R2=5.1k, range=%.0f Bar)\n",
+                  PIN_PRESSURE, (float)PRESSURE_RANGE_BAR);
 }
 
 void readTemperature() {
@@ -50,6 +63,9 @@ void readTemperature() {
         // This is CleverCoffee's technique to smooth derivative calculations
         filteredTemp = (EMA_ALPHA * tempCelsius) + ((1.0 - EMA_ALPHA) * filteredTemp);
         
+        // Reset the sensor timeout timer — we have a good reading
+        lastValidReadingMillis = millis();
+
         // Update global state with filtered value (thread-safe)
         STATE_LOCK();
         int prevFailures = state.consecutiveSensorFailures;
@@ -94,4 +110,30 @@ void readTemperature() {
         
         // Don't update state.currentTemp, keep last valid filtered value
     }
+}
+
+void readPressure() {
+    // Average multiple samples to reduce ESP32 ADC noise
+    int32_t sum = 0;
+    for (int i = 0; i < PRESSURE_ADC_SAMPLES; i++) {
+        sum += analogRead(PIN_PRESSURE);
+    }
+    float vGpio = (sum / (float)PRESSURE_ADC_SAMPLES) * (3.3f / 4095.0f);
+
+    // Reverse voltage divider (R1=2.2kΩ, R2=5.1kΩ) to recover sensor output voltage
+    float vSensor = vGpio / PRESSURE_DIVIDER_RATIO;
+
+    // Linear map: PRESSURE_SENSOR_V_LOW = 0 Bar, PRESSURE_SENSOR_V_HIGH = PRESSURE_RANGE_BAR
+    float bar = (vSensor - PRESSURE_SENSOR_V_LOW)
+                / (PRESSURE_SENSOR_V_HIGH - PRESSURE_SENSOR_V_LOW)
+                * PRESSURE_RANGE_BAR;
+
+    // Clamp to valid range (handles ADC noise near the rails)
+    if (bar < 0.0f) bar = 0.0f;
+    if (bar > PRESSURE_RANGE_BAR) bar = PRESSURE_RANGE_BAR;
+
+    STATE_LOCK();
+    state.currentPressure   = bar;
+    state.pressureVoltage   = vGpio;  // Raw GPIO voltage before divider reversal
+    STATE_UNLOCK();
 }

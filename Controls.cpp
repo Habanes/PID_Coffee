@@ -7,6 +7,10 @@
 // Preferences instance for persistent storage
 Preferences preferences;
 
+// Mutex to serialise NVS access — savePIDToStorage() can be called from both
+// the Control task (button press) and the WebServer task (API handlers).
+static SemaphoreHandle_t preferencesMutex = NULL;
+
 // PID Variables
 double pidInput = 0.0;      // Current temperature
 double pidOutput = 0.0;     // PID output (0-1000ms) - for PID library
@@ -27,15 +31,10 @@ static double emaFactor = DEFAULT_EMA_FACTOR;
 static double BrewKp = DEFAULT_BREW_KP;
 static double BrewKi = DEFAULT_BREW_KI;
 static double BrewKd = DEFAULT_BREW_KD;
-static int brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
-static int brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
-static int brewBoostDutyCycle = DEFAULT_BREW_BOOST_DUTY_CYCLE;
-static int brewDelayDutyCycle = DEFAULT_BREW_DELAY_DUTY_CYCLE;
+static bool brewTuningsActive = false; // True when state machine activates brew PID
 
-// Brew phase state machine
-enum BrewPhase { BREW_PHASE_NONE, BREW_PHASE_BOOST, BREW_PHASE_DELAY, BREW_PHASE_PID };
-static BrewPhase brewPhase = BREW_PHASE_NONE;
-static unsigned long brewPhaseStartTime = 0;
+// Current heater output mode — set by state machine, consumed by ISR
+volatile HeaterMode currentHeaterMode = HEATER_OFF;
 
 // PID Controller Instance (8-arg rancilio fork: arg7=pMode 1=P_ON_E, arg8=DIRECT)
 PID myPID(&pidInput, &pidOutput, &pidSetpoint, DEFAULT_KP, DEFAULT_KI, DEFAULT_KD, 1, DIRECT);
@@ -59,41 +58,32 @@ volatile unsigned long isrTickCount = 0; // Diagnostic: total ISR executions
  * Example: If pidOutput = 600, SSR is ON for 600ms, OFF for 400ms each second.
  */
 void IRAM_ATTR onPIDTimer() {
-    isrTickCount++; // Diagnostic counter
-    
-    // Emergency stop overrides everything
-    if (emergencyStopActive) {
+    isrTickCount++;
+
+    // Safety overrides always cut the heater
+    if (emergencyStopActive || relayForceOff || currentHeaterMode == HEATER_OFF) {
         digitalWrite(RELAY_PIN, LOW);
         isrCounter += PID_TIMER_INTERVAL_MS;
-        if (isrCounter >= windowSize) {
-            isrCounter = 0;
-        }
+        if (isrCounter >= windowSize) isrCounter = 0;
         return;
     }
-    
-    // Force relay off for testing (allows cool-down without PID interference)
-    if (relayForceOff) {
-        digitalWrite(RELAY_PIN, LOW);
+
+    // Full-on: bypass time-proportional logic
+    if (currentHeaterMode == HEATER_FULL_ON) {
+        digitalWrite(RELAY_PIN, HIGH);
         isrCounter += PID_TIMER_INTERVAL_MS;
-        if (isrCounter >= windowSize) {
-            isrCounter = 0;
-        }
+        if (isrCounter >= windowSize) isrCounter = 0;
         return;
     }
-    
-    // Time-proportional control (read atomic 32-bit copy, not the 8-byte double)
+
+    // HEATER_PID: time-proportional using pidOutputISR (atomic 32-bit copy of pidOutput)
     if (isrCounter >= pidOutputISR) {
-        digitalWrite(RELAY_PIN, LOW);  // Turn SSR OFF
+        digitalWrite(RELAY_PIN, LOW);
     } else {
-        digitalWrite(RELAY_PIN, HIGH); // Turn SSR ON
+        digitalWrite(RELAY_PIN, HIGH);
     }
-    
     isrCounter += PID_TIMER_INTERVAL_MS;
-    
-    // Reset counter every SSR_WINDOW_MS
-    if (isrCounter >= windowSize) {
-        isrCounter = 0;
-    }
+    if (isrCounter >= windowSize) isrCounter = 0;
 }
 
 void setupControls() {
@@ -102,7 +92,15 @@ void setupControls() {
     pinMode(RELAY_PIN, OUTPUT);
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[CONTROLS] Relay pin LOW (safe)");
-    
+
+    // Setup Pump and Valve pins (active HIGH — low-side transistors)
+    Serial.printf("[CONTROLS] Setting up pump GPIO%d, valve GPIO%d\n", PIN_PUMP, PIN_VALVE);
+    pinMode(PIN_PUMP, OUTPUT);
+    digitalWrite(PIN_PUMP, LOW);
+    pinMode(PIN_VALVE, OUTPUT);
+    digitalWrite(PIN_VALVE, LOW);
+    Serial.println("[CONTROLS] Pump and valve pins LOW (safe)");
+
     // Configure PID Controller
     pidSetpoint = state.setTemp;  // Already loaded from storage
     Serial.printf("[CONTROLS] PID setpoint: %.1f°C\n", pidSetpoint);
@@ -144,7 +142,6 @@ void updatePID() {
     bool sensorErr = state.sensorError;
     float currentTemp = state.currentTemp;
     float setTemp = state.setTemp;
-    bool brewMode = state.brewMode;
     STATE_UNLOCK();
     
     // CRITICAL SAFETY CHECK #1: Sensor Error
@@ -187,86 +184,24 @@ void updatePID() {
         return;
     }
 
-    // --- BREW MODE TRANSITION LOGIC ---
-    if (brewMode && brewPhase == BREW_PHASE_NONE) {
-        // Brew mode just activated: start boost phase
-        brewPhase = BREW_PHASE_BOOST;
-        brewPhaseStartTime = millis();
-        myPID.SetMode(MANUAL);
-        pidOutput = (brewBoostDutyCycle / 100.0) * windowSize;
-        pidOutputISR = (uint32_t)pidOutput;
-        Serial.printf("[CONTROLS] Brew mode ON - Boost phase (%ds @ %d%%)\n", brewBoostSeconds, brewBoostDutyCycle);
-    } else if (!brewMode && brewPhase != BREW_PHASE_NONE) {
-        // Brew mode deactivated: restore heating PID immediately regardless of phase
-        brewPhase = BREW_PHASE_NONE;
-        myPID.SetMode(AUTOMATIC);
-        myPID.SetTunings(Kp, Ki, Kd, 1);
-        Serial.println("[CONTROLS] Brew mode OFF - back to heating PID");
-    }
-
-    // --- BREW PHASE ADVANCEMENT ---
-    unsigned long now = millis();
-
-    if (brewPhase == BREW_PHASE_BOOST) {
-        if ((now - brewPhaseStartTime) >= (unsigned long)brewBoostSeconds * 1000UL) {
-            brewPhase = BREW_PHASE_DELAY;
-            brewPhaseStartTime = now;
-            pidOutput = (brewDelayDutyCycle / 100.0) * windowSize;
-            pidOutputISR = (uint32_t)pidOutput;
-            Serial.printf("[CONTROLS] Brew delay phase (%ds @ %d%%)\n", brewDelaySeconds, brewDelayDutyCycle);
-        } else {
-            pidOutput = (brewBoostDutyCycle / 100.0) * windowSize;
-            pidOutputISR = (uint32_t)pidOutput;
-            STATE_LOCK();
-            state.pidOutput = pidOutput;
-            STATE_UNLOCK();
-            return;
-        }
-    }
-
-    if (brewPhase == BREW_PHASE_DELAY) {
-        if ((now - brewPhaseStartTime) >= (unsigned long)brewDelaySeconds * 1000UL) {
-            brewPhase = BREW_PHASE_PID;
-            myPID.SetMode(AUTOMATIC);
-            myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
-            Serial.println("[CONTROLS] Brew delay elapsed - brew PID active");
-        } else {
-            pidOutput = (brewDelayDutyCycle / 100.0) * windowSize;
-            pidOutputISR = (uint32_t)pidOutput;
-            STATE_LOCK();
-            state.pidOutput = pidOutput;
-            STATE_UNLOCK();
-            return;
-        }
-    }
-
-    // --- PID COMPUTE ---
+    // PID compute — re-apply heating tunings each cycle to pick up live web UI changes
+    // (skipped when brew tunings are active — setBrewPIDActive() manages the switch)
     pidInput = currentTemp;
     pidSetpoint = setTemp;
-
-    if (brewPhase == BREW_PHASE_NONE) {
-        // Normal mode: re-apply heating tunings (allows live tuning updates)
+    if (!brewTuningsActive) {
         myPID.SetTunings(Kp, Ki, Kd, 1);
     }
-
     myPID.Compute();
-    pidOutputISR = (uint32_t)pidOutput;  // Atomic 32-bit copy for ISR
-    
-    // Store output in global state for display/debugging (thread-safe)
+    pidOutputISR = (uint32_t)pidOutput;
+
     STATE_LOCK();
     state.pidOutput = pidOutput;
     STATE_UNLOCK();
-    
-    // Console output every 1 second
+
     static unsigned long lastDebug = 0;
     if (millis() - lastDebug > CONTROLS_DEBUG_MS) {
         float dutyCycle = (pidOutput / windowSize * 100.0);
-        const char* modeStr = "HEAT";
-        if (brewPhase == BREW_PHASE_BOOST) modeStr = "BOOST";
-        else if (brewPhase == BREW_PHASE_DELAY) modeStr = "DELAY";
-        else if (brewPhase == BREW_PHASE_PID) modeStr = "BREW";
-        Serial.printf("[%s] %.1f°C → %.1f°C | %.1f%% duty\n",
-                      modeStr, setTemp, currentTemp, dutyCycle);
+        Serial.printf("[PID] %.1f°C → %.1f°C | %.1f%% duty\n", setTemp, currentTemp, dutyCycle);
         lastDebug = millis();
     }
 }
@@ -280,9 +215,9 @@ void resetPIDMemory() {
 }
 
 void emergencyStop() {
-    emergencyStopActive = true;
+    emergencyStopActive = true;  // ISR reads this volatile flag and cuts relay within 10ms
     pidOutput = 0;
-    digitalWrite(RELAY_PIN, LOW);
+    pidOutputISR = 0;
 
     STATE_LOCK();
     float currentTemp = state.currentTemp;
@@ -304,65 +239,59 @@ bool isRelayForceOff() {
     return relayForceOff;
 }
 
-// ========== BREW MODE FUNCTIONS ==========
+void setHeaterOutput(HeaterMode mode) {
+    currentHeaterMode = mode;
+}
 
-void setBrewMode(bool active) {
+void setPump(bool on) {
+    digitalWrite(PIN_PUMP, on ? HIGH : LOW);
     STATE_LOCK();
-    state.brewMode = active;
+    state.pumpOn = on;
     STATE_UNLOCK();
 }
 
-bool isBrewModeActive() {
+void setValve(bool on) {
+    digitalWrite(PIN_VALVE, on ? HIGH : LOW);
     STATE_LOCK();
-    bool active = state.brewMode;
+    state.valveOn = on;
     STATE_UNLOCK();
-    return active;
 }
 
-bool isBrewBoostPhase() {
-    return brewPhase == BREW_PHASE_BOOST;
+// ========== BREW PID API ==========
+
+void setBrewPIDActive(bool active) {
+    brewTuningsActive = active;
+    if (active) {
+        myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
+        Serial.println("[CONTROLS] Brew PID tunings active");
+    } else {
+        myPID.SetTunings(Kp, Ki, Kd, 1);
+        Serial.println("[CONTROLS] Heating PID tunings restored");
+    }
 }
 
-bool isBrewDelayPhase() {
-    return brewPhase == BREW_PHASE_DELAY;
-}
-
-void setBrewPIDTunings(double kp, double ki, double kd, int boostSeconds, int delaySeconds, int boostDutyCycle, int delayDutyCycle) {
+void setBrewPIDTunings(double kp, double ki, double kd) {
     BrewKp = kp;
     BrewKi = ki;
     BrewKd = kd;
-    brewBoostSeconds = boostSeconds;
-    brewDelaySeconds = delaySeconds;
-    brewBoostDutyCycle = boostDutyCycle;
-    brewDelayDutyCycle = delayDutyCycle;
-    // Apply immediately if brew PID is already active
-    if (brewPhase == BREW_PHASE_PID) {
+    if (brewTuningsActive) {
         myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
     }
     saveBrewSettingsToStorage();
-    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f, Ki=%.3f, Kd=%.1f, Boost=%ds@%d%%, Delay=%ds@%d%%\n",
-                  BrewKp, BrewKi, BrewKd, brewBoostSeconds, brewBoostDutyCycle, brewDelaySeconds, brewDelayDutyCycle);
+    Serial.printf("[CONTROLS] Brew PID updated: Kp=%.1f Ki=%.3f Kd=%.1f\n", BrewKp, BrewKi, BrewKd);
 }
 
-void getBrewPIDTunings(double &kp, double &ki, double &kd, int &boostSeconds, int &delaySeconds, int &boostDutyCycle, int &delayDutyCycle) {
+void getBrewPIDTunings(double &kp, double &ki, double &kd) {
     kp = BrewKp;
     ki = BrewKi;
     kd = BrewKd;
-    boostSeconds = brewBoostSeconds;
-    delaySeconds = brewDelaySeconds;
-    boostDutyCycle = brewBoostDutyCycle;
-    delayDutyCycle = brewDelayDutyCycle;
 }
 
 void resetBrewPIDToDefaults() {
     BrewKp = DEFAULT_BREW_KP;
     BrewKi = DEFAULT_BREW_KI;
     BrewKd = DEFAULT_BREW_KD;
-    brewBoostSeconds = DEFAULT_BREW_BOOST_SECONDS;
-    brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
-    brewBoostDutyCycle = DEFAULT_BREW_BOOST_DUTY_CYCLE;
-    brewDelayDutyCycle = DEFAULT_BREW_DELAY_DUTY_CYCLE;
-    if (brewPhase == BREW_PHASE_PID) {
+    if (brewTuningsActive) {
         myPID.SetTunings(BrewKp, BrewKi, BrewKd, 1);
     }
     saveBrewSettingsToStorage();
@@ -370,15 +299,13 @@ void resetBrewPIDToDefaults() {
 }
 
 void saveBrewSettingsToStorage() {
+    xSemaphoreTake(preferencesMutex, portMAX_DELAY);
     preferences.begin("coffee-pid", false);
     preferences.putDouble("brewKp", BrewKp);
     preferences.putDouble("brewKi", BrewKi);
     preferences.putDouble("brewKd", BrewKd);
-    preferences.putInt("brewBoost", brewBoostSeconds);
-    preferences.putInt("brewDelay", brewDelaySeconds);
-    preferences.putInt("brewBoostDuty", brewBoostDutyCycle);
-    preferences.putInt("brewDelayDuty", brewDelayDutyCycle);
     preferences.end();
+    xSemaphoreGive(preferencesMutex);
 }
 
 // ========== HEATING PID API FUNCTIONS ==========
@@ -421,6 +348,9 @@ bool isEmergencyStopActive() {
  * If no values are stored, defaults from Controls.h are used.
  */
 void loadPIDFromStorage() {
+    // Initialise here — this runs at boot before any tasks, so the mutex
+    // is guaranteed to exist before any concurrent caller can reach the save functions.
+    preferencesMutex = xSemaphoreCreateMutex();
     Serial.println("[STORAGE] Opening NVS namespace 'coffee-pid'...");
     bool opened = preferences.begin("coffee-pid", true); // Read-only mode
     Serial.printf("[STORAGE] NVS open: %s\n", opened ? "OK" : "FAILED (will use defaults)");
@@ -436,19 +366,15 @@ void loadPIDFromStorage() {
     state.setTemp = preferences.getDouble("targetTemp", DEFAULT_TARGET_TEMP);
     pidSetpoint = state.setTemp;
 
-    // Load brew mode settings
+    // Load brew PID tunings
     BrewKp = preferences.getDouble("brewKp", DEFAULT_BREW_KP);
     BrewKi = preferences.getDouble("brewKi", DEFAULT_BREW_KI);
     BrewKd = preferences.getDouble("brewKd", DEFAULT_BREW_KD);
-    brewBoostSeconds = preferences.getInt("brewBoost", DEFAULT_BREW_BOOST_SECONDS);
-    brewDelaySeconds = preferences.getInt("brewDelay", DEFAULT_BREW_DELAY_SECONDS);
-    brewBoostDutyCycle = preferences.getInt("brewBoostDuty", DEFAULT_BREW_BOOST_DUTY_CYCLE);
-    brewDelayDutyCycle = preferences.getInt("brewDelayDuty", DEFAULT_BREW_DELAY_DUTY_CYCLE);
     setBuzzerMute(preferences.getBool("buzzerMute", BUZZER_MUTE));
-    
+
     preferences.end();
-    Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f\u00b0C | Brew boost=%ds@%d%%, delay=%ds@%d%%\n",
-                  Kp, Ki, Kd, state.setTemp, brewBoostSeconds, brewBoostDutyCycle, brewDelaySeconds, brewDelayDutyCycle);
+    Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f°C | BrewKp=%.1f Ki=%.3f Kd=%.1f\n",
+                  Kp, Ki, Kd, state.setTemp, BrewKp, BrewKi, BrewKd);
 }
 
 /**
@@ -457,17 +383,20 @@ void loadPIDFromStorage() {
  * Stores values persistently - they survive reboots and power loss.
  */
 void savePIDToStorage() {
-    preferences.begin("coffee-pid", false); // Read-write mode
-    
+    xSemaphoreTake(preferencesMutex, portMAX_DELAY);
+    preferences.begin("coffee-pid", false);
     preferences.putDouble("Kp", Kp);
     preferences.putDouble("Ki", Ki);
     preferences.putDouble("Kd", Kd);
     preferences.putDouble("IMax", IMax);
     preferences.putDouble("emaFactor", emaFactor);
-    preferences.putDouble("targetTemp", state.setTemp);
+    STATE_LOCK();
+    double setTemp = state.setTemp;
+    STATE_UNLOCK();
+    preferences.putDouble("targetTemp", setTemp);
     preferences.putBool("buzzerMute", getBuzzerMute());
-    
     preferences.end();
+    xSemaphoreGive(preferencesMutex);
 }
 
 /**

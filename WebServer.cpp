@@ -133,35 +133,31 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
 
-        <!-- Brew timing -->
+        <!-- Brew status -->
         <div class="card">
-            <div class="card-title">Brew Timing</div>
+            <div class="card-title">Brew Status</div>
             <div class="brew-status-row">
                 <span class="brew-status-indicator" id="brewStatusBadge">INACTIVE</span>
-                <span class="brew-status-label" id="brewStatusLabel">Brew mode off &mdash; press GPIO&nbsp;0 button to activate</span>
+                <span class="brew-status-label" id="brewStatusLabel">Idle &mdash; activate coffee switch to start a brew</span>
             </div>
-            <div class="pid-controls">
-                <div class="control-grid">
-                    <div class="control-group">
-                        <label for="brewBoostSecondsInput">Boost Duration (s)</label>
-                        <input type="number" id="brewBoostSecondsInput" step="1" value="5" min="0" max="30">
-                    </div>
-                    <div class="control-group">
-                        <label for="brewBoostDutyInput">Boost Duty Cycle (%)</label>
-                        <input type="number" id="brewBoostDutyInput" step="1" value="100" min="0" max="100">
-                    </div>
-                    <div class="control-group">
-                        <label for="brewDelaySecondsInput">Delay Duration (s)</label>
-                        <input type="number" id="brewDelaySecondsInput" step="1" value="5" min="0" max="30">
-                    </div>
-                    <div class="control-group">
-                        <label for="brewDelayDutyInput">Delay Duty Cycle (%)</label>
-                        <input type="number" id="brewDelayDutyInput" step="1" value="0" min="0" max="100">
-                    </div>
+        </div>
+
+        <!-- Sensor &amp; Output Diagnostics -->
+        <div class="card">
+            <div class="card-title">Diagnostics</div>
+            <div class="diag-grid">
+                <div class="diag-section">
+                    <div class="diag-section-title">Inputs</div>
+                    <div class="diag-row"><span class="diag-label">SW pin voltage</span><span class="diag-value" id="diagSwitchV">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Pressure pin voltage</span><span class="diag-value" id="diagPressureV">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Calculated pressure</span><span class="diag-value" id="diagPressure">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">SW STEAM</span><span id="diagSwSteam" class="diag-led off">OFF</span></div>
+                    <div class="diag-row"><span class="diag-label">SW COFFEE</span><span id="diagSwCoffee" class="diag-led off">OFF</span></div>
                 </div>
-                <div style="display: flex; gap: 10px;">
-                    <button class="btn-brew" onclick="applyBrewSettings(this)" style="flex: 1;">Apply Timing</button>
-                    <button class="btn-reset" onclick="resetBrewSettings(this)" style="flex: 1;">Reset Defaults</button>
+                <div class="diag-section">
+                    <div class="diag-section-title">Outputs</div>
+                    <div class="diag-row"><span class="diag-label">Pump</span><span id="diagPump" class="diag-led off">OFF</span></div>
+                    <div class="diag-row"><span class="diag-label">Valve</span><span id="diagValve" class="diag-led off">OFF</span></div>
                 </div>
             </div>
         </div>
@@ -526,6 +522,50 @@ header h1 { font-size: 2em; color: #b6926e; }
 }
 .brew-status-label { color: rgba(182, 146, 110, 0.55); font-size: 0.9em; }
 
+/* Diagnostics card */
+.diag-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+@media (max-width: 600px) { .diag-grid { grid-template-columns: 1fr; } }
+.diag-section-title {
+    font-size: 0.75em;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(182, 146, 110, 0.45);
+    margin-bottom: 10px;
+    border-bottom: 1px solid rgba(182, 146, 110, 0.12);
+    padding-bottom: 4px;
+}
+.diag-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(182, 146, 110, 0.07);
+}
+.diag-label { color: rgba(182, 146, 110, 0.6); font-size: 0.88em; }
+.diag-value { color: #b6926e; font-size: 0.9em; font-variant-numeric: tabular-nums; }
+.diag-led {
+    padding: 3px 12px;
+    border-radius: 10px;
+    font-size: 0.78em;
+    font-weight: bold;
+    letter-spacing: 0.05em;
+}
+.diag-led.off {
+    background: rgba(182, 146, 110, 0.06);
+    color: rgba(182, 146, 110, 0.35);
+    border: 1px solid rgba(182, 146, 110, 0.15);
+}
+.diag-led.on {
+    background: #261608;
+    color: #b6926e;
+    border: 1px solid rgba(182, 146, 110, 0.5);
+    box-shadow: 0 0 6px rgba(182, 146, 110, 0.2);
+}
+
 /* Status card */
 .status-display {
     font-size: 1.8em;
@@ -690,45 +730,63 @@ function fetchRealData() {
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
         dashboardAPI.setConnectionStatus(true);
         dashboardAPI.setRelayError(data.error);
-        updateBrewStatus(data.brewMode, data.brewBoostPhase, data.brewDelayPhase);
+        updateBrewStatus(data.machineState, data.coffeeSubstate, data.errorReason || '');
         updateRelayForceBtn(data.relayForceOff);
-        updateMachineStatus(data.relayForceOff, data.brewMode);
+        updateMachineStatus(data.relayForceOff, data.machineState);
+        updateDiagnostics(data);
         updateDashboard();
     }).catch(e => {
         console.error('Fetch error:', e);
         dashboardAPI.setConnectionStatus(false);
     });
 }
-function updateMachineStatus(emergencyOff, brewMode) {
+function updateMachineStatus(emergencyOff, machineState) {
     const el = document.getElementById('machineStatus');
     if (!el) return;
     if (emergencyOff) {
         el.textContent = 'Emergency Off';
         el.className = 'status-display emergency';
-    } else if (brewMode) {
+    } else if (machineState === 'ERROR') {
+        el.textContent = 'ERROR';
+        el.className = 'status-display emergency';
+    } else if (machineState === 'COFFEE') {
         el.textContent = 'Brewing';
         el.className = 'status-display brewing';
+    } else if (machineState === 'STEAM') {
+        el.textContent = 'Steam';
+        el.className = 'status-display heating';
     } else {
         el.textContent = 'Heating Up';
         el.className = 'status-display heating';
     }
 }
-function updateBrewStatus(brewMode, boostPhase, delayPhase) {
+function updateBrewStatus(machineState, coffeeSubstate, errorReason) {
     const badge = document.getElementById('brewStatusBadge');
     const label = document.getElementById('brewStatusLabel');
     if (!badge || !label) return;
-    if (brewMode && boostPhase) {
-        badge.textContent = 'BOOST'; badge.className = 'brew-status-indicator boost';
-        label.textContent = 'Brew boost \u2014 heater at full power';
-    } else if (brewMode && delayPhase) {
-        badge.textContent = 'DELAY'; badge.className = 'brew-status-indicator delay';
-        label.textContent = 'Pre-brew delay \u2014 heater off, brew PID pending';
-    } else if (brewMode) {
-        badge.textContent = 'BREWING'; badge.className = 'brew-status-indicator active';
-        label.textContent = 'Brew PID active \u2014 maintaining extraction temperature';
+    const labels = {
+        'PREINFUSE': ['PRE-INFUSE', 'active', 'Pump on \u2014 building pressure through puck'],
+        'BLOOM':     ['BLOOM',      'boost',  'Pump off \u2014 soaking puck, valve holds pressure'],
+        'PREHEAT':   ['PREHEAT',    'boost',  'Full heat burst \u2014 recovering block temperature'],
+        'BREW_MAX':  ['BREW MAX',   'boost',  'Full heat + pump \u2014 countering temperature dip'],
+        'BREW_PID':  ['BREWING',    'active', 'Brew PID active \u2014 maintaining extraction temperature'],
+        'DONE':      ['DONE',       'delay',  'Shot complete \u2014 release coffee switch to return to idle'],
+    };
+    if (machineState === 'COFFEE' && labels[coffeeSubstate]) {
+        const [text, cls, desc] = labels[coffeeSubstate];
+        badge.textContent = text; badge.className = 'brew-status-indicator ' + cls;
+        label.textContent = desc;
+    } else if (machineState === 'STEAM') {
+        badge.textContent = 'STEAM'; badge.className = 'brew-status-indicator boost';
+        label.textContent = 'Steam mode \u2014 hardware thermostat active';
+    } else if (machineState === 'ERROR') {
+        badge.textContent = 'ERROR'; badge.className = 'brew-status-indicator delay';
+        label.textContent = errorReason
+            ? '\u26a0 ' + errorReason + ' \u2014 turn both switches off to acknowledge'
+            : 'Safety lockout \u2014 turn both switches off to acknowledge';
     } else {
         badge.textContent = 'INACTIVE'; badge.className = 'brew-status-indicator';
-        label.textContent = 'Brew mode off \u2014 press GPIO\u00a00 button to activate';
+        label.textContent = 'Idle \u2014 activate coffee switch to start a brew';
     }
 }
 function updateRelayForceBtn(forceOff) {
@@ -741,6 +799,22 @@ function updateRelayForceBtn(forceOff) {
         btn.classList.remove('forced-off');
         btn.textContent = 'Emergency Off';
     }
+}
+function updateDiagnostics(d) {
+    function set(id, val) { const el = document.getElementById(id); if (el) el.textContent = val; }
+    function led(id, on) {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.className = 'diag-led ' + (on ? 'on' : 'off');
+        el.textContent = on ? 'ON' : 'OFF';
+    }
+    set('diagSwitchV',  (d.switchV  !== undefined) ? d.switchV.toFixed(3)  + ' V' : '—');
+    set('diagPressureV',(d.pressureV !== undefined) ? d.pressureV.toFixed(3) + ' V' : '—');
+    set('diagPressure', (d.pressure  !== undefined) ? d.pressure.toFixed(2)  + ' Bar' : '—');
+    led('diagSwSteam',  d.swSteam);
+    led('diagSwCoffee', d.swCoffee);
+    led('diagPump',     d.pumpOn);
+    led('diagValve',    d.valveOn);
 }
 function updateBuzzerMuteBtn(muted) {
     const btn = document.getElementById('buzzerMuteBtn');
@@ -776,10 +850,6 @@ function applyAllPID(btn) {
     const brewKp = parseFloat(document.getElementById('brewKpInput').value);
     const brewKi = parseFloat(document.getElementById('brewKiInput').value);
     const brewKd = parseFloat(document.getElementById('brewKdInput').value);
-    const boostSeconds = parseInt(document.getElementById('brewBoostSecondsInput').value);
-    const boostDuty = parseInt(document.getElementById('brewBoostDutyInput').value);
-    const delaySeconds = parseInt(document.getElementById('brewDelaySecondsInput').value);
-    const delayDuty = parseInt(document.getElementById('brewDelayDutyInput').value);
     if (isNaN(kp)||kp<0||kp>500) { alert('Kp: 0-500'); return; }
     if (isNaN(ki)||ki<0||ki>50) { alert('Ki: 0-50'); return; }
     if (isNaN(kd)||kd<0||kd>2000) { alert('Kd: 0-2000'); return; }
@@ -787,13 +857,9 @@ function applyAllPID(btn) {
     if (isNaN(brewKp)||brewKp<0||brewKp>500) { alert('Brew Kp: 0-500'); return; }
     if (isNaN(brewKi)||brewKi<0||brewKi>50) { alert('Brew Ki: 0-50'); return; }
     if (isNaN(brewKd)||brewKd<0||brewKd>2000) { alert('Brew Kd: 0-2000'); return; }
-    if (isNaN(boostSeconds)||boostSeconds<0||boostSeconds>30) { alert('Boost: 0-30s'); return; }
-    if (isNaN(boostDuty)||boostDuty<0||boostDuty>100) { alert('Boost duty: 0-100%'); return; }
-    if (isNaN(delaySeconds)||delaySeconds<0||delaySeconds>30) { alert('Delay: 0-30s'); return; }
-    if (isNaN(delayDuty)||delayDuty<0||delayDuty>100) { alert('Delay duty: 0-100%'); return; }
     fetch('/api/setAllSettings', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({kp, ki, kd, target, brewKp, brewKi, brewKd, boostSeconds, boostDuty, delaySeconds, delayDuty})
+        body: JSON.stringify({kp, ki, kd, target, brewKp, brewKi, brewKd})
     }).then(r => r.json()).then(() => {
         const txt = btn.textContent;
         btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
@@ -813,10 +879,6 @@ function resetAllPID(btn) {
             document.getElementById('brewKpInput').value = d.brewKp;
             document.getElementById('brewKiInput').value = d.brewKi;
             document.getElementById('brewKdInput').value = d.brewKd;
-            document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
-            document.getElementById('brewBoostDutyInput').value = d.boostDuty;
-            document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
-            document.getElementById('brewDelayDutyInput').value = d.delayDuty;
             const txt = btn.textContent;
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
@@ -848,40 +910,6 @@ function resetPIDMemory(btn) {
     }).catch(e => { console.error('PID memory reset error:', e); alert('Failed to reset PID memory'); });
 }
 
-function applyBrewSettings(btn) {
-    const boostSeconds = parseInt(document.getElementById('brewBoostSecondsInput').value);
-    const boostDuty = parseInt(document.getElementById('brewBoostDutyInput').value);
-    const delaySeconds = parseInt(document.getElementById('brewDelaySecondsInput').value);
-    const delayDuty = parseInt(document.getElementById('brewDelayDutyInput').value);
-    if (isNaN(boostSeconds)||boostSeconds<0||boostSeconds>30) { alert('Boost: 0-30s'); return; }
-    if (isNaN(boostDuty)||boostDuty<0||boostDuty>100) { alert('Boost duty: 0-100%'); return; }
-    if (isNaN(delaySeconds)||delaySeconds<0||delaySeconds>30) { alert('Delay: 0-30s'); return; }
-    if (isNaN(delayDuty)||delayDuty<0||delayDuty>100) { alert('Delay duty: 0-100%'); return; }
-    fetch('/api/setBrewTiming', {
-        method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({boostSeconds, boostDuty, delaySeconds, delayDuty})
-    }).then(r=>r.json()).then(() => {
-        const txt = btn.textContent;
-        btn.textContent = 'Applied \u2713'; btn.style.backgroundColor = '#28a745';
-        setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
-    }).catch(e => { console.error('Brew update error:', e); alert('Failed to update brew timing'); });
-}
-function resetBrewSettings(btn) {
-    if (!confirm('Reset brew timing to factory defaults?')) return;
-    fetch('/api/resetBrewTiming', {
-        method: 'POST', headers: {'Content-Type':'application/json'}
-    }).then(r=>r.json()).then(d=>{
-        if (d.status === 'ok') {
-            document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
-            document.getElementById('brewBoostDutyInput').value = d.boostDuty;
-            document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
-            document.getElementById('brewDelayDutyInput').value = d.delayDuty;
-            const txt = btn.textContent;
-            btn.textContent = 'Reset Complete \u2713';
-            setTimeout(() => { btn.textContent = txt; }, 2000);
-        }
-    }).catch(e => { console.error('Brew reset error:', e); alert('Failed to reset brew timing'); });
-}
 function init() {
     console.log('Dashboard init');
     fetch('/api/getSettings').then(r=>r.json()).then(d=>{
@@ -892,10 +920,6 @@ function init() {
         document.getElementById('brewKpInput').value = d.brewKp;
         document.getElementById('brewKiInput').value = d.brewKi;
         document.getElementById('brewKdInput').value = d.brewKd;
-        document.getElementById('brewBoostSecondsInput').value = d.boostSeconds;
-        document.getElementById('brewBoostDutyInput').value = d.boostDuty;
-        document.getElementById('brewDelaySecondsInput').value = d.delaySeconds;
-        document.getElementById('brewDelayDutyInput').value = d.delayDuty;
         updateBuzzerMuteBtn(d.buzzerMute);
     }).catch(e => console.error('Failed to load settings:', e));
     fetchRealData(); setInterval(fetchRealData, 1000);
@@ -1044,27 +1068,53 @@ void handleWebServer() {
                             sendResponse(client, script_js, "application/javascript");
                         }
                         else if (requestLine.indexOf("GET /api/data") >= 0) {
-                            // Read state with mutex protection
                             STATE_LOCK();
-                            float currentTemp = state.currentTemp;
-                            float setTemp = state.setTemp;
-                            float pidOutput = state.pidOutput;
-                            bool brewMode = state.brewMode;
+                            float currentTemp       = state.currentTemp;
+                            float setTemp           = state.setTemp;
+                            float pidOutput         = state.pidOutput;
+                            float currentPressure   = state.currentPressure;
+                            float pressureVoltage   = state.pressureVoltage;
+                            float switchVoltage     = state.switchVoltage;
+                            bool  swSteam           = state.swSteam;
+                            bool  swCoffee          = state.swCoffee;
+                            bool  pumpOn            = state.pumpOn;
+                            bool  valveOn           = state.valveOn;
+                            MachineState  ms        = state.machineState;
+                            CoffeeSubstate cs       = state.coffeeSubstate;
+                            char  errorReason[64];
+                            strncpy(errorReason, state.errorReason, sizeof(errorReason));
                             STATE_UNLOCK();
-                            
-                            // Send real-time data as JSON
+
+                            // Convert enums to strings for JS
+                            const char* msStr = (ms == STATE_COFFEE) ? "COFFEE" :
+                                               (ms == STATE_STEAM)  ? "STEAM"  :
+                                               (ms == STATE_ERROR)  ? "ERROR"  : "IDLE";
+                            const char* csStr = (cs == COFFEE_PREINFUSE)  ? "PREINFUSE"  :
+                                               (cs == COFFEE_BLOOM)      ? "BLOOM"      :
+                                               (cs == COFFEE_PREHEAT)    ? "PREHEAT"    :
+                                               (cs == COFFEE_BREW_MAX)   ? "BREW_MAX"   :
+                                               (cs == COFFEE_BREW_PID)   ? "BREW_PID"   :
+                                               (cs == COFFEE_DONE)       ? "DONE"       : "NONE";
+
                             String json = "{";
-                            json += "\"currentTemp\":" + String(currentTemp, 1) + ",";
-                            json += "\"setTemp\":" + String(setTemp, 1) + ",";
-                            json += "\"pidOutput\":" + String(pidOutput, 0) + ",";
-                            json += "\"dutyCycle\":" + String((pidOutput / SSR_WINDOW_MS * 100.0), 1) + ",";
-                            json += "\"error\":" + String(isEmergencyStopActive() ? "true" : "false") + ",";
-                            json += "\"brewMode\":" + String(brewMode ? "true" : "false") + ",";
-                            json += "\"brewBoostPhase\":" + String(isBrewBoostPhase() ? "true" : "false") + ",";
-                            json += "\"brewDelayPhase\":" + String(isBrewDelayPhase() ? "true" : "false") + ",";
+                            json += "\"currentTemp\":"  + String(currentTemp, 1) + ",";
+                            json += "\"setTemp\":"      + String(setTemp, 1) + ",";
+                            json += "\"pidOutput\":"    + String(pidOutput, 0) + ",";
+                            json += "\"dutyCycle\":"    + String((pidOutput / SSR_WINDOW_MS * 100.0), 1) + ",";
+                            json += "\"pressure\":"     + String(currentPressure, 2) + ",";
+                            json += "\"pressureV\":"    + String(pressureVoltage, 3) + ",";
+                            json += "\"switchV\":"      + String(switchVoltage, 3) + ",";
+                            json += "\"swSteam\":"      + String(swSteam  ? "true" : "false") + ",";
+                            json += "\"swCoffee\":"     + String(swCoffee ? "true" : "false") + ",";
+                            json += "\"pumpOn\":"       + String(pumpOn   ? "true" : "false") + ",";
+                            json += "\"valveOn\":"      + String(valveOn  ? "true" : "false") + ",";
+                            json += "\"machineState\":\"" + String(msStr) + "\",";
+                            json += "\"coffeeSubstate\":\"" + String(csStr) + "\",";
+                            json += "\"errorReason\":\"" + String(errorReason) + "\",";
+                            json += "\"error\":"        + String(isEmergencyStopActive() ? "true" : "false") + ",";
                             json += "\"relayForceOff\":" + String(isRelayForceOff() ? "true" : "false");
                             json += "}";
-                            
+
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
@@ -1072,12 +1122,10 @@ void handleWebServer() {
                             client.println(json);
                         }
                         else if (requestLine.indexOf("GET /api/getSettings") >= 0) {
-                            // Return all settings in one call
                             double kp, ki, kd;
                             getPIDTunings(kp, ki, kd);
                             double bkp, bki, bkd;
-                            int bboost, bdelay, bboostDuty, bdelayDuty;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
+                            getBrewPIDTunings(bkp, bki, bkd);
                             STATE_LOCK();
                             float setTemp = state.setTemp;
                             STATE_UNLOCK();
@@ -1089,10 +1137,6 @@ void handleWebServer() {
                             json += "\"brewKp\":" + String(bkp, 1) + ",";
                             json += "\"brewKi\":" + String(bki, 3) + ",";
                             json += "\"brewKd\":" + String(bkd, 1) + ",";
-                            json += "\"boostSeconds\":" + String(bboost) + ",";
-                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
-                            json += "\"delaySeconds\":" + String(bdelay) + ",";
-                            json += "\"delayDuty\":" + String(bdelayDuty) + ",";
                             json += "\"buzzerMute\":" + String(getBuzzerMute() ? "true" : "false");
                             json += "}";
                             client.println("HTTP/1.1 200 OK");
@@ -1130,42 +1174,30 @@ void handleWebServer() {
                         else if (requestLine.indexOf("POST /api/setAllSettings") >= 0) {
                             double kp = 0, ki = 0, kd = 0, target = 0;
                             double bkp = 0, bki = 0, bkd = 0;
-                            int bboost = DEFAULT_BREW_BOOST_SECONDS;
-                            int bdelay = DEFAULT_BREW_DELAY_SECONDS;
-                            int bboostDuty = DEFAULT_BREW_BOOST_DUTY_CYCLE;
-                            int bdelayDuty = DEFAULT_BREW_DELAY_DUTY_CYCLE;
-                            int kpIdx = body.indexOf("\"kp\":");
-                            int kiIdx = body.indexOf("\"ki\":");
-                            int kdIdx = body.indexOf("\"kd\":");
+                            int kpIdx     = body.indexOf("\"kp\":");
+                            int kiIdx     = body.indexOf("\"ki\":");
+                            int kdIdx     = body.indexOf("\"kd\":");
                             int targetIdx = body.indexOf("\"target\":");
                             int brewKpIdx = body.indexOf("\"brewKp\":");
                             int brewKiIdx = body.indexOf("\"brewKi\":");
                             int brewKdIdx = body.indexOf("\"brewKd\":");
-                            int boostIdx = body.indexOf("\"boostSeconds\":");
-                            int boostDutyIdx = body.indexOf("\"boostDuty\":");
-                            int delayIdx = body.indexOf("\"delaySeconds\":");
-                            int delayDutyIdx = body.indexOf("\"delayDuty\":");
-                            if (kpIdx >= 0) kp = body.substring(kpIdx + 5).toDouble();
-                            if (kiIdx >= 0) ki = body.substring(kiIdx + 5).toDouble();
-                            if (kdIdx >= 0) kd = body.substring(kdIdx + 5).toDouble();
+                            if (kpIdx >= 0)     kp     = body.substring(kpIdx + 5).toDouble();
+                            if (kiIdx >= 0)     ki     = body.substring(kiIdx + 5).toDouble();
+                            if (kdIdx >= 0)     kd     = body.substring(kdIdx + 5).toDouble();
                             if (targetIdx >= 0) target = body.substring(targetIdx + 9).toDouble();
-                            if (brewKpIdx >= 0) bkp = body.substring(brewKpIdx + 9).toDouble();
-                            if (brewKiIdx >= 0) bki = body.substring(brewKiIdx + 9).toDouble();
-                            if (brewKdIdx >= 0) bkd = body.substring(brewKdIdx + 9).toDouble();
-                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 15).toInt();
-                            if (boostDutyIdx >= 0) bboostDuty = body.substring(boostDutyIdx + 12).toInt();
-                            if (delayIdx >= 0) bdelay = body.substring(delayIdx + 15).toInt();
-                            if (delayDutyIdx >= 0) bdelayDuty = body.substring(delayDutyIdx + 12).toInt();
+                            if (brewKpIdx >= 0) bkp    = body.substring(brewKpIdx + 9).toDouble();
+                            if (brewKiIdx >= 0) bki    = body.substring(brewKiIdx + 9).toDouble();
+                            if (brewKdIdx >= 0) bkd    = body.substring(brewKdIdx + 9).toDouble();
                             setPIDTunings(kp, ki, kd);
                             setTargetTemp(target);
-                            setBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
+                            setBrewPIDTunings(bkp, bki, bkd);
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
                             client.println("Connection: close");
                             client.println();
                             client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] All settings: Kp=%.1f Ki=%.3f Kd=%.1f T=%.1f | BKp=%.1f BKi=%.3f BKd=%.1f Boost=%ds@%d%% Delay=%ds@%d%%\n",
-                                         kp, ki, kd, target, bkp, bki, bkd, bboost, bboostDuty, bdelay, bdelayDuty);
+                            Serial.printf("[WEB] All settings: Kp=%.1f Ki=%.3f Kd=%.1f T=%.1f | BKp=%.1f BKi=%.3f BKd=%.1f\n",
+                                         kp, ki, kd, target, bkp, bki, bkd);
                         }
                         else if (requestLine.indexOf("POST /api/resetAllSettings") >= 0) {
                             resetPIDToDefaults();
@@ -1176,8 +1208,7 @@ void handleWebServer() {
                             float setTemp = state.setTemp;
                             STATE_UNLOCK();
                             double bkp, bki, bkd;
-                            int bboost, bdelay, bboostDuty, bdelayDuty;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
+                            getBrewPIDTunings(bkp, bki, bkd);
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(kp, 1) + ",";
@@ -1186,11 +1217,7 @@ void handleWebServer() {
                             json += "\"target\":" + String(setTemp, 1) + ",";
                             json += "\"brewKp\":" + String(bkp, 1) + ",";
                             json += "\"brewKi\":" + String(bki, 3) + ",";
-                            json += "\"brewKd\":" + String(bkd, 1) + ",";
-                            json += "\"boostSeconds\":" + String(bboost) + ",";
-                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
-                            json += "\"delaySeconds\":" + String(bdelay) + ",";
-                            json += "\"delayDuty\":" + String(bdelayDuty);
+                            json += "\"brewKd\":" + String(bkd, 1);
                             json += "}";
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
@@ -1207,51 +1234,6 @@ void handleWebServer() {
                             client.println();
                             client.println("{\"status\":\"ok\"}");
                             Serial.println("[WEB] PID memory reset (integral zeroed)");
-                        }
-                        else if (requestLine.indexOf("POST /api/setBrewTiming") >= 0) {
-                            // Preserve existing brew PID tunings, update only timing
-                            double bkp, bki, bkd;
-                            int bboost, bdelay, bboostDuty, bdelayDuty;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            int boostIdx = body.indexOf("\"boostSeconds\":");
-                            int boostDutyIdx = body.indexOf("\"boostDuty\":");
-                            int delayIdx = body.indexOf("\"delaySeconds\":");
-                            int delayDutyIdx = body.indexOf("\"delayDuty\":");
-                            if (boostIdx >= 0) bboost = body.substring(boostIdx + 15).toInt();
-                            if (boostDutyIdx >= 0) bboostDuty = body.substring(boostDutyIdx + 12).toInt();
-                            if (delayIdx >= 0) bdelay = body.substring(delayIdx + 15).toInt();
-                            if (delayDutyIdx >= 0) bdelayDuty = body.substring(delayDutyIdx + 12).toInt();
-                            setBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            client.println("HTTP/1.1 200 OK");
-                            client.println("Content-Type: application/json");
-                            client.println("Connection: close");
-                            client.println();
-                            client.println("{\"status\":\"ok\"}");
-                            Serial.printf("[WEB] Brew timing updated: Boost=%ds@%d%%, Delay=%ds@%d%%\n",
-                                         bboost, bboostDuty, bdelay, bdelayDuty);
-                        }
-                        else if (requestLine.indexOf("POST /api/resetBrewTiming") >= 0) {
-                            // Preserve existing brew PID tunings, reset only timing
-                            double bkp, bki, bkd;
-                            int bboost, bdelay, bboostDuty, bdelayDuty;
-                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            setBrewPIDTunings(bkp, bki, bkd,
-                                             DEFAULT_BREW_BOOST_SECONDS, DEFAULT_BREW_DELAY_SECONDS,
-                                             DEFAULT_BREW_BOOST_DUTY_CYCLE, DEFAULT_BREW_DELAY_DUTY_CYCLE);
-                            getBrewPIDTunings(bkp, bki, bkd, bboost, bdelay, bboostDuty, bdelayDuty);
-                            String json = "{";
-                            json += "\"status\":\"ok\",";
-                            json += "\"boostSeconds\":" + String(bboost) + ",";
-                            json += "\"boostDuty\":" + String(bboostDuty) + ",";
-                            json += "\"delaySeconds\":" + String(bdelay) + ",";
-                            json += "\"delayDuty\":" + String(bdelayDuty);
-                            json += "}";
-                            client.println("HTTP/1.1 200 OK");
-                            client.println("Content-Type: application/json");
-                            client.println("Connection: close");
-                            client.println();
-                            client.println(json);
-                            Serial.println("[WEB] Brew timing reset to defaults");
                         }
                         else if (requestLine.indexOf("POST /api/setRelayForce") >= 0) {
                             bool forceOff = body.indexOf("\"forceOff\":true") >= 0;

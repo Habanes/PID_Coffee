@@ -13,6 +13,7 @@
 #include "Input.h"
 #include "Display.h"
 #include "Controls.h"
+#include "StateMachine.h"
 #include "WebServer.h"
 #include "Buzzer.h"
 
@@ -35,23 +36,28 @@ void TaskDisplay(void * pvParameters) {
 // --- TASK: CONTROL (CORE 1) ---
 // Handles Sensor -> PID -> Relay logic @ 10Hz.
 void TaskControl(void * pvParameters) {
-  setupSensors();  // Initialize TSIC
-  setupControls(); // Initialize Relay/PID
+  setupSensors();         // Initialize TSIC + pressure pin attenuation
+  setupControls();        // Initialize heater relay, pump, valve, PID, hardware timer
+  setupStateMachine();    // Set safe output defaults, log initial state
 
   const TickType_t xFrequency = TASK_CONTROL_CYCLE_MS / portTICK_PERIOD_MS;
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   for(;;) {
     // 1. Read Inputs (Rotary is Interrupt-based, but we sync state here)
-    syncInputState(); 
+    syncInputState();
 
-    // 2. Read Temperature
-    readTemperature(); 
+    // 2. Read Sensors
+    readTemperature();
+    readPressure();
 
-    // 3. Calculate PID & Update Relay
+    // 3. Run PID computation (always runs; state machine controls which output the ISR uses)
     updatePID();
-    
-    // 4. Wait until the next 100ms cycle (Accurate timing)
+
+    // 4. Evaluate state machine transitions and apply hardware outputs
+    updateStateMachine();
+
+    // 5. Wait until the next 100ms cycle (Accurate timing)
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
   }
 }

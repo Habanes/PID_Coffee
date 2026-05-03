@@ -16,8 +16,14 @@
 #define PIN_IN2                 5   // Signal B
 #define PIN_BTN                 4   // Push button
 
-// Brew button (active LOW, internal pull-up)
-#define PIN_BREW                2
+// Switch input ADC — both optocouplers share one ADC pin via resistor ladder
+// Ladder: R_steam=10kΩ → node, R_coffee=5.1kΩ → node, R_pulldown=5.1kΩ → GND; Vsrc=5V
+#define PIN_SWITCHES            2   // ADC: SW_STEAM + SW_COFFEE voltage divider
+#define PIN_PRESSURE            1   // ADC: pressure transducer (stubbed until sensor arrives)
+
+// Pump and valve outputs (active HIGH — low-side transistor switches, 5V load)
+#define PIN_PUMP                48
+#define PIN_VALVE               38
 
 // Buzzer
 #define BUZZER_PIN              47
@@ -63,6 +69,13 @@
 #define SENSITIVITY_COARSE      1.0f    // Coarse encoder sensitivity (°C/step)
 #define SENSITIVITY_THRESHOLD   0.5f    // Midpoint for sensitivity toggle
 
+// Switch ADC decode thresholds (12-bit 0–4095, Vref=3.3V)
+// Ladder voltages: BOTH=0.000V(0), COFFEE=1.016V(1261), STEAM=1.992V(2472), NEITHER=3.008V(3733)
+#define SWITCH_ADC_BOTH_MAX     631     //    0 –  631 → both pressed   (ERROR territory)
+#define SWITCH_ADC_COFFEE_MAX   1867    //  632 – 1867 → coffee only
+#define SWITCH_ADC_STEAM_MAX    3103    // 1868 – 3103 → steam only
+                                        // 3104 – 4095 → neither pressed
+
 // =====================================================================
 // SAFETY LIMITS
 // =====================================================================
@@ -84,6 +97,18 @@
 
 // Minimum interval between sensor error log prints (ms)
 #define SENSOR_ERROR_LOG_MS     1000
+
+// How long (ms) the sensor can go without a valid reading before triggering ERROR
+#define SENSOR_TIMEOUT_MS       5000
+
+// Pressure transducer (GPIO PIN_PRESSURE = 1)
+// Wiring: sensor OUT → R1=2.2kΩ → GPIO, R2=5.1kΩ → GND (Vgpio_max = 3.144V @ 4.5V out)
+// Sensor output range: 0.5V = 0 Bar, 4.5V = PRESSURE_RANGE_BAR (ratiometric, 5V supply)
+#define PRESSURE_RANGE_BAR          16.0f   // Full-scale Bar — MUST match the ordered sensor range
+#define PRESSURE_DIVIDER_RATIO      0.6986f // R2/(R1+R2) = 5100/(2200+5100)
+#define PRESSURE_SENSOR_V_LOW       0.5f    // Sensor output voltage at 0 Bar
+#define PRESSURE_SENSOR_V_HIGH      4.5f    // Sensor output voltage at full scale
+#define PRESSURE_ADC_SAMPLES        4       // Samples averaged per read to reduce ADC noise
 
 // =====================================================================
 // CONTROLS
@@ -131,6 +156,27 @@
 #define TASK_WEBSERVER_PRIORITY     1       // FreeRTOS priority for web server task
 
 // =====================================================================
+// STATE MACHINE
+// =====================================================================
+
+// Safety cutoffs — trigger ERROR state, require user acknowledgment to clear
+#define SAFE_TEMP_MAX               150.0f  // Max block temp before ERROR (°C)
+#define SAFE_PRESSURE_MAX           14.0f   // Max pressure before ERROR (Bar)
+
+// Brew interlock — block must cool below this before COFFEE state is allowed
+#define BREW_MAX_TEMP               98.0f   // °C
+
+// Brew substate timers (milliseconds)
+#define PREINFUSE_MAX_TIME_MS       5000    // Max pre-infusion before forced transition
+#define BLOOM_TIME_MS               3000    // Bloom (puck soak) duration
+#define PREHEAT_TIME_MS             500     // Pre-heat burst before pump restarts
+#define BREW_MAX_TIME_MS            2000    // Full-heat + pump phase to counter temp dip
+#define BREW_PID_MAX_TIME_MS        45000   // Max PID brew time before DONE
+
+// Pressure threshold to end pre-infusion early (Bar)
+#define PREINFUSE_TARGET_PRESS      2.5f
+
+// =====================================================================
 // PID DEFAULTS — General
 // =====================================================================
 
@@ -153,9 +199,5 @@
 #define DEFAULT_BREW_KP             50.0
 #define DEFAULT_BREW_KI             0.0     // Integral disabled during brew
 #define DEFAULT_BREW_KD             1000.0  // = Tv * Kp  (20.0 * 50.0)
-#define DEFAULT_BREW_BOOST_SECONDS  5       // Seconds heater runs at boost duty cycle after brew starts
-#define DEFAULT_BREW_BOOST_DUTY_CYCLE 100   // % duty cycle during boost window (100 = full on)
-#define DEFAULT_BREW_DELAY_SECONDS  5       // Seconds at delay duty cycle after the boost window
-#define DEFAULT_BREW_DELAY_DUTY_CYCLE 0     // % duty cycle during delay window (0 = full off)
 
 #endif // CONFIG_H
