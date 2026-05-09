@@ -41,7 +41,7 @@ void setupBuzzer() {
 void playStartupJingle() {
     if (_buzzerMuted) return;
     // 240 BPM → 250 ms per quarter beat
-    const int msPerBeat = 250;
+    const int msPerBeat = 150;
 
     for (int i = 0; i < _noteCount; i++) {
         int duration = _beats[i] * msPerBeat;
