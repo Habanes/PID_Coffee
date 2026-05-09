@@ -10,17 +10,20 @@ void setBuzzerMute(bool muted) {
 }
 
 // =====================================================================
-// STARTUP JINGLE  — "ee-abc / cc-baf"  (120 BPM)
+// STARTUP JINGLE  (240 BPM)
+// e - d - Fsharp -- Gsharp -- csharp - B - D -- E -- B - A - Csharp -- E -- A ---
 // =====================================================================
 static const int _melody[] = {
-    NOTE_E4, NOTE_E4, NOTE_A4, NOTE_B4, NOTE_C5,
-    REST,
-    NOTE_C5, NOTE_C5, NOTE_B4, NOTE_A4, NOTE_F4
+    NOTE_E5, NOTE_D5, NOTE_FS4, NOTE_GS4,
+    NOTE_CS5, NOTE_B4, NOTE_D4, NOTE_E4,
+    NOTE_B4, NOTE_A4, NOTE_CS4, NOTE_E4,
+    NOTE_A4
 };
 static const int _beats[] = {
-    1, 1, 1, 1, 4,
-    1,
-    1, 1, 1, 1, 4
+    1, 1, 2, 2,
+    1, 1, 2, 2,
+    1, 1, 2, 2,
+    3
 };
 static const int _noteCount = sizeof(_melody) / sizeof(_melody[0]);
 
@@ -37,8 +40,8 @@ void setupBuzzer() {
 // =====================================================================
 void playStartupJingle() {
     if (_buzzerMuted) return;
-    // 120 BPM → 500 ms per beat; tripled = 360 BPM → ~167 ms per beat
-    const int msPerBeat = 500 / 3;
+    // 240 BPM → 250 ms per quarter beat
+    const int msPerBeat = 250;
 
     for (int i = 0; i < _noteCount; i++) {
         int duration = _beats[i] * msPerBeat;
