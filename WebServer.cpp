@@ -52,6 +52,13 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <span class="unit">ms</span>
                 </div>
             </div>
+            <div class="card">
+                <div class="card-title">Pressure</div>
+                <div class="value-display" id="pressure">
+                    <span class="value">0.00</span>
+                    <span class="unit">Bar</span>
+                </div>
+            </div>
             <div class="card status-card" id="statusCard">
                 <div class="card-title">Status</div>
                 <div class="status-display" id="machineStatus">Heating Up</div>
@@ -655,7 +662,7 @@ footer {
 )rawliteral";
 
 const char script_js[] PROGMEM = R"rawliteral(
-let currentTemp = 92.5, setTemp = 93.0, pidOutput = 450, dutyCycle = 45.0;
+let currentTemp = 92.5, setTemp = 93.0, pidOutput = 450, dutyCycle = 45.0, currentPressure = 0.0;
 if (typeof Chart === 'undefined') { console.error('Chart.js not loaded!'); }
 const ctx = document.getElementById('tempChart').getContext('2d');
 const chart = new Chart(ctx, {
@@ -701,6 +708,7 @@ function updateDashboard() {
     document.querySelector('#currentTemp .value').textContent = currentTemp.toFixed(1);
     document.querySelector('#setTemp .value').textContent = setTemp.toFixed(1);
     document.querySelector('#pidOutput .value').textContent = Math.round(pidOutput);
+    document.querySelector('#pressure .value').textContent = currentPressure.toFixed(2);
     const dutyBar = document.getElementById('dutyBar');
     dutyBar.style.width = dutyCycle + '%';
     dutyBar.querySelector('.duty-bar-text').textContent = dutyCycle.toFixed(1) + '%';
@@ -728,6 +736,7 @@ function fetchRealData() {
     fetch('/api/data').then(r => r.json()).then(data => {
         currentTemp = data.currentTemp; setTemp = data.setTemp;
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
+        currentPressure = data.pressure || 0.0;
         dashboardAPI.setConnectionStatus(true);
         dashboardAPI.setRelayError(data.error);
         updateBrewStatus(data.machineState, data.coffeeSubstate, data.errorReason || '');
