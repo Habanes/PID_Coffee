@@ -40,8 +40,7 @@ void setupBuzzer() {
 // =====================================================================
 void playStartupJingle() {
     if (_buzzerMuted) return;
-    // 240 BPM → 250 ms per quarter beat
-    const int msPerBeat = 250;
+    const int msPerBeat = 100;
 
     for (int i = 0; i < _noteCount; i++) {
         int duration = _beats[i] * msPerBeat;
@@ -80,10 +79,20 @@ void playEncoderTick() {
     tone(BUZZER_PIN, 2000, 12);
 }
 
-// Brew mode toggled on or off
-void playBrewToggle() {
+// Brew entry: D4 then A4 (ascending — "starting")
+void playBrewStart() {
     if (_buzzerMuted) return;
-    tone(BUZZER_PIN, 600, 220);
+    tone(BUZZER_PIN, NOTE_D4, 150);
+    delay(170);
+    tone(BUZZER_PIN, NOTE_A4, 200);
+}
+
+// Brew exit: A4 then D4 (descending — "finishing")
+void playBrewEnd() {
+    if (_buzzerMuted) return;
+    tone(BUZZER_PIN, NOTE_A4, 150);
+    delay(170);
+    tone(BUZZER_PIN, NOTE_D4, 200);
 }
 
 // =====================================================================

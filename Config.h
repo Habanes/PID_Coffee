@@ -19,15 +19,15 @@
 // Switch input ADC — both optocouplers share one ADC pin via resistor ladder
 // Ladder: R_steam=10kΩ → node, R_coffee=5.1kΩ → node, R_pulldown=5.1kΩ → GND; Vsrc=5V
 #define PIN_SWITCHES            2   // ADC: SW_STEAM + SW_COFFEE voltage divider
-#define PIN_PRESSURE            1   // ADC: pressure transducer (stubbed until sensor arrives)
+#define PIN_PRESSURE            1   // ADC: pressure transducer (voltage divider R1=2.2k R2=5.1k)
 
-// Pump and valve outputs (active HIGH — low-side transistor switches, 5V load)
-#define PIN_PUMP                48
-#define PIN_VALVE               38
+// Pump and valve outputs (active LOW — low-side transistor switches, 5V load)
+#define PIN_PUMP                38
+#define PIN_VALVE               48
 
 // Buzzer
 #define BUZZER_PIN              47
-#define BUZZER_MUTE             true    // Set true to silence all buzzer output
+#define BUZZER_MUTE             false   // Set true to silence all buzzer output
 
 // 7-Segment display — digit enable pins (common anode, active HIGH)
 #define PIN_DISP_DIGIT1         3
@@ -70,11 +70,13 @@
 #define SENSITIVITY_THRESHOLD   0.5f    // Midpoint for sensitivity toggle
 
 // Switch ADC decode thresholds (12-bit 0–4095, Vref=3.3V)
-// Ladder voltages: BOTH=0.000V(0), COFFEE=1.016V(1261), STEAM=1.992V(2472), NEITHER=3.008V(3733)
-#define SWITCH_ADC_BOTH_MAX     631     //    0 –  631 → both pressed   (ERROR territory)
-#define SWITCH_ADC_COFFEE_MAX   1867    //  632 – 1867 → coffee only
-#define SWITCH_ADC_STEAM_MAX    3103    // 1868 – 3103 → steam only
-                                        // 3104 – 4095 → neither pressed
+// Active-HIGH optos: 0V = neither active, higher voltage = switch(es) active.
+// Ladder voltages: NEITHER=0.000V(0), STEAM=1.689V(2096), COFFEE=2.500V(3101), BOTH=3.008V(3733)
+// Thresholds at midpoints between adjacent states.
+#define SWITCH_ADC_NEITHER_MAX  1048    //    0 – 1048 → neither pressed (0V)
+#define SWITCH_ADC_STEAM_MAX    2599    // 1049 – 2599 → steam only     (~1.7V)
+#define SWITCH_ADC_COFFEE_MAX   3417    // 2600 – 3417 → coffee only    (~2.5V)
+                                        // 3418 – 4095 → both pressed   (~3.0V)
 
 // =====================================================================
 // SAFETY LIMITS
@@ -89,7 +91,7 @@
 // SENSOR
 // =====================================================================
 
-// EMA smoothing factor for raw TSIC readings (0 = no smoothing, 1 = maximum smoothing)
+// EMA smoothing factor for raw TSIC readings (0 = maximum smoothing, 1 = no smoothing / raw pass-through)
 #define EMA_ALPHA               0.6f
 
 // Seed value for EMA filter on startup (room temperature assumption)
@@ -167,11 +169,11 @@
 #define BREW_MAX_TEMP               98.0f   // °C
 
 // Brew substate timers (milliseconds)
-#define PREINFUSE_MAX_TIME_MS       5000    // Max pre-infusion before forced transition
-#define BLOOM_TIME_MS               3000    // Bloom (puck soak) duration
-#define PREHEAT_TIME_MS             500     // Pre-heat burst before pump restarts
-#define BREW_MAX_TIME_MS            2000    // Full-heat + pump phase to counter temp dip
-#define BREW_PID_MAX_TIME_MS        45000   // Max PID brew time before DONE
+#define PREINFUSE_MAX_TIME_MS       3000    // Max pre-infusion before forced transition
+#define BLOOM_TIME_MS               5000    // Bloom (puck soak) duration
+#define PREHEAT_TIME_MS             2000    // Pre-heat burst before pump restarts
+#define BREW_MAX_TIME_MS            8000    // Full-heat + pump phase to counter temp dip
+#define BREW_PID_MAX_TIME_MS        60000   // Max PID brew time before DONE
 
 // Pressure threshold to end pre-infusion early (Bar)
 #define PREINFUSE_TARGET_PRESS      2.5f

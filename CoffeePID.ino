@@ -80,7 +80,13 @@ void TaskWebServer(void * pvParameters) {
 void setup() {
   Serial.begin(115200);
 
-  // Initialize buzzer and play jingle during the startup window
+  // 0. Initialize state mutex FIRST (before any tasks access shared state)
+  initStateMutex();
+
+  // Load saved settings from NVS — must run before jingle so buzzer mute state is respected
+  loadPIDFromStorage();
+
+  // Play startup jingle during the boot window (blocking — before tasks start)
   setupBuzzer();
   playStartupJingle();
 
@@ -91,43 +97,33 @@ void setup() {
   Serial.printf("[BOOT] CPU freq: %u MHz\n", ESP.getCpuFreqMHz());
   Serial.printf("[BOOT] SDK version: %s\n", ESP.getSdkVersion());
 
-  // 0. Initialize state mutex FIRST (before any tasks access shared state)
-  Serial.println("[BOOT] Step 0: initStateMutex...");
-  initStateMutex();
-  Serial.println("[BOOT] Step 0: DONE");
-
-  // 1. Load saved PID settings from NVS (before any tasks start)
-  Serial.println("[BOOT] Step 1: loadPIDFromStorage...");
-  loadPIDFromStorage();
+  // 1. Setup Inputs (Interrupts attach here)
+  Serial.println("[BOOT] Step 1: setupInput...");
+  setupInput();
   Serial.println("[BOOT] Step 1: DONE");
 
-  // 2. Setup Inputs (Interrupts attach here)
-  Serial.println("[BOOT] Step 2: setupInput...");
-  setupInput();
-  Serial.println("[BOOT] Step 2: DONE");
-
-  // 3. Create Display Task on CORE 0
-  Serial.println("[BOOT] Step 3: creating Display task...");
+  // 2. Create Display Task on CORE 0
+  Serial.println("[BOOT] Step 2: creating Display task...");
   BaseType_t dispResult = xTaskCreatePinnedToCore(
     TaskDisplay, "Display", TASK_DISPLAY_STACK, NULL, TASK_DISPLAY_PRIORITY, &TaskDisplayHandle, 0
   );
-  Serial.printf("[BOOT] Step 3: Display task %s (handle=%p)\n",
+  Serial.printf("[BOOT] Step 2: Display task %s (handle=%p)\n",
     dispResult == pdPASS ? "CREATED OK" : "FAILED", (void*)TaskDisplayHandle);
 
-  // 4. Create Web Server Task on CORE 0
-  Serial.println("[BOOT] Step 4: creating WebServer task...");
+  // 3. Create Web Server Task on CORE 0
+  Serial.println("[BOOT] Step 3: creating WebServer task...");
   BaseType_t wsResult = xTaskCreatePinnedToCore(
     TaskWebServer, "WebServer", TASK_WEBSERVER_STACK, NULL, TASK_WEBSERVER_PRIORITY, &TaskWebServerHandle, 0
   );
-  Serial.printf("[BOOT] Step 4: WebServer task %s (handle=%p)\n",
+  Serial.printf("[BOOT] Step 3: WebServer task %s (handle=%p)\n",
     wsResult == pdPASS ? "CREATED OK" : "FAILED", (void*)TaskWebServerHandle);
 
-  // 5. Create Control Task on CORE 1 (highest priority)
-  Serial.println("[BOOT] Step 5: creating Control task...");
+  // 4. Create Control Task on CORE 1 (highest priority)
+  Serial.println("[BOOT] Step 4: creating Control task...");
   BaseType_t ctrlResult = xTaskCreatePinnedToCore(
     TaskControl, "Control", TASK_CONTROL_STACK, NULL, TASK_CONTROL_PRIORITY, &TaskControlHandle, 1
   );
-  Serial.printf("[BOOT] Step 5: Control task %s (handle=%p)\n",
+  Serial.printf("[BOOT] Step 4: Control task %s (handle=%p)\n",
     ctrlResult == pdPASS ? "CREATED OK" : "FAILED", (void*)TaskControlHandle);
 
   Serial.printf("[BOOT] Setup complete. Free heap: %u bytes\n", ESP.getFreeHeap());

@@ -9,7 +9,7 @@
 TSIC tempSensor(TSIC_SIGNAL_PIN, NO_VCC_PIN, TSIC_30x);
 
 // Last valid filtered temperature (EMA-smoothed); seeded at room temperature
-float filteredTemp = SENSOR_EMA_SEED_TEMP;
+static float filteredTemp = SENSOR_EMA_SEED_TEMP;
 
 // Timestamp of the last valid temperature reading; used for sensor timeout detection
 static unsigned long lastValidReadingMillis = 0;
@@ -42,17 +42,21 @@ void readTemperature() {
             STATE_LOCK();
             state.consecutiveSensorFailures++;
             int failures = state.consecutiveSensorFailures;
-            
-            // Check if we've exceeded failure threshold
-            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+            bool wasError = state.sensorError;
+
+            if (failures >= MAX_CONSECUTIVE_FAILURES && !wasError) {
                 state.sensorError = true;
             }
             STATE_UNLOCK();
-            
-            Serial.printf("[SENSORS] ERROR: Invalid temperature %.1f°C (outside %.1f-%.1f°C range)\n",
-                         tempCelsius, TEMP_MIN_VALID, TEMP_MAX_VALID);
-            
-            if (failures >= MAX_CONSECUTIVE_FAILURES) {
+
+            static unsigned long lastErrorPrint = 0;
+            if (millis() - lastErrorPrint > SENSOR_ERROR_LOG_MS) {
+                Serial.printf("[SENSORS] ERROR: Invalid temperature %.1f°C (outside %.1f-%.1f°C range)\n",
+                             tempCelsius, TEMP_MIN_VALID, TEMP_MAX_VALID);
+                lastErrorPrint = millis();
+            }
+
+            if (failures >= MAX_CONSECUTIVE_FAILURES && !wasError) {
                 Serial.println("[SENSORS] CRITICAL: Sensor error state activated after consecutive failures!");
             }
             
@@ -61,7 +65,7 @@ void readTemperature() {
         
         // Valid reading - apply EMA filter to reduce noise
         // This is CleverCoffee's technique to smooth derivative calculations
-        filteredTemp = (EMA_ALPHA * tempCelsius) + ((1.0 - EMA_ALPHA) * filteredTemp);
+        filteredTemp = (EMA_ALPHA * tempCelsius) + ((1.0f - EMA_ALPHA) * filteredTemp);
         
         // Reset the sensor timeout timer — we have a good reading
         lastValidReadingMillis = millis();

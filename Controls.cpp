@@ -33,6 +33,14 @@ static double BrewKi = DEFAULT_BREW_KI;
 static double BrewKd = DEFAULT_BREW_KD;
 static bool brewTuningsActive = false; // True when state machine activates brew PID
 
+// Brew timing parameters (milliseconds — runtime-configurable, defaults from Config.h)
+static unsigned long brewPreinfuseMs = PREINFUSE_MAX_TIME_MS;
+static unsigned long brewBloomMs     = BLOOM_TIME_MS;
+static unsigned long brewPreheatMs   = PREHEAT_TIME_MS;
+static unsigned long brewMaxMs       = BREW_MAX_TIME_MS;
+static unsigned long brewPidMaxMs    = BREW_PID_MAX_TIME_MS;
+static float brewPreinfuseTargetBar  = PREINFUSE_TARGET_PRESS;
+
 // Current heater output mode — set by state machine, consumed by ISR
 volatile HeaterMode currentHeaterMode = HEATER_OFF;
 
@@ -93,13 +101,13 @@ void setupControls() {
     digitalWrite(RELAY_PIN, LOW);
     Serial.println("[CONTROLS] Relay pin LOW (safe)");
 
-    // Setup Pump and Valve pins (active HIGH — low-side transistors)
+    // Setup Pump and Valve pins (active LOW — low-side transistors; HIGH = OFF)
     Serial.printf("[CONTROLS] Setting up pump GPIO%d, valve GPIO%d\n", PIN_PUMP, PIN_VALVE);
     pinMode(PIN_PUMP, OUTPUT);
-    digitalWrite(PIN_PUMP, LOW);
+    digitalWrite(PIN_PUMP, HIGH);   // active-LOW: HIGH = OFF
     pinMode(PIN_VALVE, OUTPUT);
-    digitalWrite(PIN_VALVE, LOW);
-    Serial.println("[CONTROLS] Pump and valve pins LOW (safe)");
+    digitalWrite(PIN_VALVE, HIGH);  // active-LOW: HIGH = OFF
+    Serial.println("[CONTROLS] Pump and valve pins HIGH (safe/off)");
 
     // Configure PID Controller
     pidSetpoint = state.setTemp;  // Already loaded from storage
@@ -157,7 +165,11 @@ void updatePID() {
     }
     
     // CRITICAL SAFETY CHECK #2: Temperature out of plausible range
-    if (currentTemp < TEMP_MIN_VALID || currentTemp > EMERGENCY_STOP_TEMP) {
+    // Over-temp check skipped when heater is already off (e.g. steam mode) — the heater
+    // cannot be causing the high temperature, and setting the flag would leave it stuck
+    // off after returning to idle until the block cools below EMERGENCY_STOP_TEMP.
+    if (currentTemp < TEMP_MIN_VALID ||
+        (currentTemp > EMERGENCY_STOP_TEMP && currentHeaterMode != HEATER_OFF)) {
         if (!emergencyStopActive) {
             emergencyStop();
             Serial.printf("[CONTROLS] !!! EMERGENCY STOP: Implausible temperature %.1f\u00b0C !!!\n", currentTemp);
@@ -168,8 +180,8 @@ void updatePID() {
         return;
     }
     
-    // Clear emergency stop if temperature is back to safe range
-    if (emergencyStopActive && currentTemp < (setTemp + EMERGENCY_STOP_HYSTERESIS)) {
+    // Clear emergency stop once temperature drops back below the trigger with hysteresis
+    if (emergencyStopActive && currentTemp < (EMERGENCY_STOP_TEMP - EMERGENCY_STOP_HYSTERESIS)) {
         emergencyStopActive = false;
         Serial.println("[CONTROLS] Emergency stop cleared - temperature safe");
     }
@@ -244,14 +256,14 @@ void setHeaterOutput(HeaterMode mode) {
 }
 
 void setPump(bool on) {
-    digitalWrite(PIN_PUMP, on ? HIGH : LOW);
+    digitalWrite(PIN_PUMP, on ? LOW : HIGH);   // active-LOW: LOW = ON
     STATE_LOCK();
     state.pumpOn = on;
     STATE_UNLOCK();
 }
 
 void setValve(bool on) {
-    digitalWrite(PIN_VALVE, on ? HIGH : LOW);
+    digitalWrite(PIN_VALVE, on ? LOW : HIGH);  // active-LOW: LOW = ON
     STATE_LOCK();
     state.valveOn = on;
     STATE_UNLOCK();
@@ -308,6 +320,62 @@ void saveBrewSettingsToStorage() {
     xSemaphoreGive(preferencesMutex);
 }
 
+// ========== BREW TIMING API ==========
+
+unsigned long getPreinfuseMaxMs() { return brewPreinfuseMs; }
+unsigned long getBloomMs()        { return brewBloomMs; }
+unsigned long getPreheatMs()      { return brewPreheatMs; }
+unsigned long getBrewMaxMs()      { return brewMaxMs; }
+unsigned long getBrewPidMaxMs()   { return brewPidMaxMs; }
+
+float getPreinfuseTargetBar() { return brewPreinfuseTargetBar; }
+
+void setPreinfuseTargetBar(float bar) {
+    if (bar >= 0.5f && bar <= 10.0f) {
+        brewPreinfuseTargetBar = bar;
+        saveBrewTimingsToStorage();
+        Serial.printf("[CONTROLS] Preinfuse target pressure: %.2f Bar\n", brewPreinfuseTargetBar);
+    }
+}
+
+HeaterMode getHeaterMode() { return currentHeaterMode; }
+
+void setBrewTimings(unsigned long preinfuse, unsigned long bloom, unsigned long preheat,
+                    unsigned long brewMax, unsigned long brewPidMax) {
+    brewPreinfuseMs = preinfuse;
+    brewBloomMs     = bloom;
+    brewPreheatMs   = preheat;
+    brewMaxMs       = brewMax;
+    brewPidMaxMs    = brewPidMax;
+    saveBrewTimingsToStorage();
+    Serial.printf("[CONTROLS] Brew timings: preinfuse=%lums bloom=%lums preheat=%lums brewMax=%lums brewPid=%lums\n",
+                  brewPreinfuseMs, brewBloomMs, brewPreheatMs, brewMaxMs, brewPidMaxMs);
+}
+
+void resetBrewTimingsToDefaults() {
+    brewPreinfuseMs        = PREINFUSE_MAX_TIME_MS;
+    brewBloomMs            = BLOOM_TIME_MS;
+    brewPreheatMs          = PREHEAT_TIME_MS;
+    brewMaxMs              = BREW_MAX_TIME_MS;
+    brewPidMaxMs           = BREW_PID_MAX_TIME_MS;
+    brewPreinfuseTargetBar = PREINFUSE_TARGET_PRESS;
+    saveBrewTimingsToStorage();
+    Serial.println("[CONTROLS] Brew timings reset to factory defaults");
+}
+
+void saveBrewTimingsToStorage() {
+    xSemaphoreTake(preferencesMutex, portMAX_DELAY);
+    preferences.begin("coffee-pid", false);
+    preferences.putULong("preinfuseMs",  brewPreinfuseMs);
+    preferences.putULong("bloomMs",      brewBloomMs);
+    preferences.putULong("preheatMs",    brewPreheatMs);
+    preferences.putULong("brewMaxMs",    brewMaxMs);
+    preferences.putULong("brewPidMaxMs", brewPidMaxMs);
+    preferences.putFloat("preinfuseBar", brewPreinfuseTargetBar);
+    preferences.end();
+    xSemaphoreGive(preferencesMutex);
+}
+
 // ========== HEATING PID API FUNCTIONS ==========
 
 void setPIDTunings(double kp, double ki, double kd) {
@@ -345,7 +413,7 @@ bool isEmergencyStopActive() {
  * @brief Load PID parameters from ESP32 NVS (Non-Volatile Storage)
  * 
  * Uses Preferences library to retrieve stored values.
- * If no values are stored, defaults from Controls.h are used.
+ * If no values are stored, defaults from Config.h are used.
  */
 void loadPIDFromStorage() {
     // Initialise here — this runs at boot before any tasks, so the mutex
@@ -372,9 +440,19 @@ void loadPIDFromStorage() {
     BrewKd = preferences.getDouble("brewKd", DEFAULT_BREW_KD);
     setBuzzerMute(preferences.getBool("buzzerMute", BUZZER_MUTE));
 
+    // Load brew timing parameters
+    brewPreinfuseMs        = preferences.getULong("preinfuseMs",  PREINFUSE_MAX_TIME_MS);
+    brewBloomMs            = preferences.getULong("bloomMs",      BLOOM_TIME_MS);
+    brewPreheatMs          = preferences.getULong("preheatMs",    PREHEAT_TIME_MS);
+    brewMaxMs              = preferences.getULong("brewMaxMs",    BREW_MAX_TIME_MS);
+    brewPidMaxMs           = preferences.getULong("brewPidMaxMs", BREW_PID_MAX_TIME_MS);
+    brewPreinfuseTargetBar = preferences.getFloat("preinfuseBar", PREINFUSE_TARGET_PRESS);
+
     preferences.end();
     Serial.printf("[STORAGE] Loaded | Kp=%.1f Ki=%.3f Kd=%.1f | Target=%.1f°C | BrewKp=%.1f Ki=%.3f Kd=%.1f\n",
                   Kp, Ki, Kd, state.setTemp, BrewKp, BrewKi, BrewKd);
+    Serial.printf("[STORAGE] Brew timings: preinfuse=%lu bloom=%lu preheat=%lu brewMax=%lu brewPid=%lu ms\n",
+                  brewPreinfuseMs, brewBloomMs, brewPreheatMs, brewMaxMs, brewPidMaxMs);
 }
 
 /**

@@ -2,6 +2,7 @@
 #include "State.h"
 #include "Controls.h"
 #include "Sensors.h"
+#include "Buzzer.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -162,8 +163,12 @@ void updateStateMachine() {
                         substateChanged = true;
                         Serial.println("[SM] IDLE→COFFEE (PREINFUSE)");
                     } else {
-                        Serial.printf("[SM] IDLE: brew blocked — block too hot (%.1f°C > %.1f°C)\n",
-                                      temp, (float)BREW_MAX_TEMP);
+                        static unsigned long lastBlockedLog = 0;
+                        if (millis() - lastBlockedLog > 1000) {
+                            Serial.printf("[SM] IDLE: brew blocked — block too hot (%.1f°C > %.1f°C)\n",
+                                          temp, (float)BREW_MAX_TEMP);
+                            lastBlockedLog = millis();
+                        }
                     }
                 }
                 break;
@@ -184,10 +189,10 @@ void updateStateMachine() {
 
             // ======================================================
             case STATE_ERROR:
-                // Require both switches off AND conditions safe before clearing
-                if (!swSteam && !swCoffee) {
+                // Require both switches off AND all safety conditions clear before releasing
+                if (!swSteam && !swCoffee && !safetyTrip) {
                     newMs = STATE_IDLE;
-                    Serial.println("[SM] ERROR→IDLE (acknowledged, conditions safe)");
+                    Serial.println("[SM] ERROR→IDLE (acknowledged)");
                 }
                 break;
 
@@ -218,8 +223,8 @@ void updateStateMachine() {
                 unsigned long elapsed = millis() - substateEntryMillis;
                 switch (cs) {
                     case COFFEE_PREINFUSE:
-                        if (pressure >= PREINFUSE_TARGET_PRESS
-                                || elapsed >= PREINFUSE_MAX_TIME_MS) {
+                        if (pressure >= getPreinfuseTargetBar()
+                                || elapsed >= getPreinfuseMaxMs()) {
                             newCs = COFFEE_BLOOM;
                             substateChanged = true;
                             Serial.printf("[SM] PREINFUSE→BLOOM (%s after %lums)\n",
@@ -228,28 +233,28 @@ void updateStateMachine() {
                         }
                         break;
                     case COFFEE_BLOOM:
-                        if (elapsed >= BLOOM_TIME_MS) {
+                        if (elapsed >= getBloomMs()) {
                             newCs = COFFEE_PREHEAT;
                             substateChanged = true;
                             Serial.println("[SM] BLOOM→PREHEAT");
                         }
                         break;
                     case COFFEE_PREHEAT:
-                        if (elapsed >= PREHEAT_TIME_MS) {
+                        if (elapsed >= getPreheatMs()) {
                             newCs = COFFEE_BREW_MAX;
                             substateChanged = true;
                             Serial.println("[SM] PREHEAT→BREW_MAX");
                         }
                         break;
                     case COFFEE_BREW_MAX:
-                        if (elapsed >= BREW_MAX_TIME_MS) {
+                        if (elapsed >= getBrewMaxMs()) {
                             newCs = COFFEE_BREW_PID;
                             substateChanged = true;
                             Serial.println("[SM] BREW_MAX→BREW_PID");
                         }
                         break;
                     case COFFEE_BREW_PID:
-                        if (elapsed >= BREW_PID_MAX_TIME_MS) {
+                        if (elapsed >= getBrewPidMaxMs()) {
                             newCs = COFFEE_DONE;
                             substateChanged = true;
                             Serial.println("[SM] BREW_PID→DONE");
@@ -297,6 +302,13 @@ void updateStateMachine() {
             state.errorReason[0] = '\0'; // Clear reason on acknowledgment
         }
         STATE_UNLOCK();
+
+        // Brew entry/exit sounds (D→A ascending on start, A→D descending on end)
+        if (newMs == STATE_COFFEE && ms != STATE_COFFEE) {
+            playBrewStart();
+        } else if (ms == STATE_COFFEE && newMs != STATE_COFFEE && newMs != STATE_ERROR) {
+            playBrewEnd();
+        }
     }
 
     // ----------------------------------------------------------

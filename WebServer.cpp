@@ -18,7 +18,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=1200, initial-scale=1.0">
     <title>QuickMill PID Controller</title>
     <link rel="stylesheet" href="/style.css">
 </head>
@@ -32,14 +32,14 @@ const char index_html[] PROGMEM = R"rawliteral(
         <!-- Live value cards -->
         <div class="grid">
             <div class="card">
-                <div class="card-title">Current Temperature</div>
+                <div class="card-title">Sensor Temp</div>
                 <div class="value-display" id="currentTemp">
                     <span class="value">92.5</span>
                     <span class="unit">°C</span>
                 </div>
             </div>
             <div class="card">
-                <div class="card-title">Set Temperature</div>
+                <div class="card-title">Target Temp</div>
                 <div class="value-display" id="setTemp">
                     <span class="value">93.0</span>
                     <span class="unit">°C</span>
@@ -59,9 +59,22 @@ const char index_html[] PROGMEM = R"rawliteral(
                     <span class="unit">Bar</span>
                 </div>
             </div>
-            <div class="card status-card" id="statusCard">
+            <div class="card status-card" id="statusCard" style="grid-column: span 2;">
                 <div class="card-title">Status</div>
                 <div class="status-display" id="machineStatus">Heating Up</div>
+                <div style="margin-top:12px;">
+                    <span class="brew-status-label" id="brewStatusLabel">Idle &mdash; activate coffee switch to start a brew</span>
+                </div>
+            </div>
+            <div class="card" style="grid-column: span 2;">
+                <div class="card-title">Target Temperature</div>
+                <div class="control-group" style="margin-bottom:12px;">
+                    <input type="number" id="targetInput" step="0.5" value="93.0" min="0" max="120">
+                </div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                    <button class="btn-primary" onclick="applyTargetTemp(this)" style="flex:1;">Set Temperature</button>
+                    <button class="btn-emergency" id="relayForceOffBtn" onclick="toggleRelayForceOff()" style="flex:1;">Emergency Off</button>
+                </div>
             </div>
         </div>
 
@@ -73,26 +86,20 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
 
-        <!-- Duty cycle bar -->
+        <!-- Duty cycle bars -->
         <div class="card">
-            <div class="card-title">Relay Duty Cycle</div>
-            <div class="duty-bar-container">
+            <div class="card-title">Heater Output</div>
+            <div class="pid-section-label" style="margin-bottom:6px;">PID Computed</div>
+            <div class="duty-bar-container" style="margin-bottom:12px;">
                 <div class="duty-bar" id="dutyBar" style="width: 45%;">
                     <span class="duty-bar-text">45%</span>
                 </div>
             </div>
-        </div>
-
-        <!-- Temperature set + Emergency Off -->
-        <div class="card">
-            <div class="card-title">Temperature Control</div>
-            <div class="temp-control-row">
-                <div class="control-group" style="flex: 1; min-width: 180px;">
-                    <label for="targetInput">Target Temperature (°C)</label>
-                    <input type="number" id="targetInput" step="0.5" value="93.0" min="0" max="120">
+            <div class="pid-section-label" style="margin-bottom:6px;">Actual Output</div>
+            <div class="duty-bar-container">
+                <div class="duty-bar" id="heaterBar" style="width: 45%;">
+                    <span class="duty-bar-text">45%</span>
                 </div>
-                <button class="btn-primary" onclick="applyTargetTemp(this)">Set Temperature</button>
-                <button class="btn-emergency" id="relayForceOffBtn" onclick="toggleRelayForceOff()">Emergency Off</button>
             </div>
         </div>
 
@@ -140,12 +147,38 @@ const char index_html[] PROGMEM = R"rawliteral(
             </div>
         </div>
 
-        <!-- Brew status -->
+        <!-- Brew Timing -->
         <div class="card">
-            <div class="card-title">Brew Status</div>
-            <div class="brew-status-row">
-                <span class="brew-status-indicator" id="brewStatusBadge">INACTIVE</span>
-                <span class="brew-status-label" id="brewStatusLabel">Idle &mdash; activate coffee switch to start a brew</span>
+            <div class="card-title">Brew Timing</div>
+            <div class="control-grid-3" style="margin-bottom:15px;">
+                <div class="control-group">
+                    <label for="preinfuseSec">Pre-infuse max (s)</label>
+                    <input type="number" id="preinfuseSec" step="0.1" value="3.0" min="0.5" max="30">
+                </div>
+                <div class="control-group">
+                    <label for="preinfuseBar">Pre-infuse target (Bar)</label>
+                    <input type="number" id="preinfuseBar" step="0.1" value="2.5" min="0.5" max="10">
+                </div>
+                <div class="control-group">
+                    <label for="bloomSec">Bloom (s)</label>
+                    <input type="number" id="bloomSec" step="0.1" value="5.0" min="0.5" max="30">
+                </div>
+                <div class="control-group">
+                    <label for="preheatSec">Preheat (s)</label>
+                    <input type="number" id="preheatSec" step="0.1" value="2.0" min="0.1" max="10">
+                </div>
+                <div class="control-group">
+                    <label for="brewMaxSec">Brew max full-heat (s)</label>
+                    <input type="number" id="brewMaxSec" step="0.1" value="8.0" min="0.1" max="30">
+                </div>
+                <div class="control-group">
+                    <label for="brewPidSec">Brew PID max (s)</label>
+                    <input type="number" id="brewPidSec" step="1" value="60" min="5" max="120">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn-primary" onclick="applyBrewTimings(this)" style="flex: 1;">Apply Timings</button>
+                <button class="btn-reset" onclick="resetBrewTimings(this)" style="flex: 1;">Reset Timings</button>
             </div>
         </div>
 
@@ -175,6 +208,21 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div class="temp-control-row">
                 <span style="flex:1; color:#b6926e;">Mute all buzzer sounds</span>
                 <button class="btn-emergency" id="buzzerMuteBtn" onclick="toggleBuzzerMute()">Mute</button>
+            </div>
+        </div>
+
+        <!-- Switch Override (temporary — hardware optos not yet installed) -->
+        <div class="card">
+            <div class="card-title">Switch Override <span style="font-size:0.72em;color:rgba(182,146,110,0.4);letter-spacing:1px;">TEMPORARY</span></div>
+            <div class="temp-control-row">
+                <span style="flex:1;color:rgba(182,146,110,0.6);font-size:0.9em;">Drive coffee/steam switches from web GUI while optocouplers are not installed</span>
+                <button class="btn-emergency" id="swOverrideBtn" onclick="toggleSwitchOverride()">Override: OFF</button>
+            </div>
+            <div id="swOverrideControls" style="display:none;margin-top:15px;">
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                    <button class="btn-primary" id="coffeeSwBtn" onclick="toggleManualSwitch('coffee')" style="flex:1;">Coffee Switch: OFF</button>
+                    <button class="btn-primary" id="steamSwBtn"  onclick="toggleManualSwitch('steam')"  style="flex:1;">Steam Switch: OFF</button>
+                </div>
             </div>
         </div>
 
@@ -578,14 +626,23 @@ header h1 { font-size: 2em; color: #b6926e; }
     font-size: 1.8em;
     font-weight: bold;
     text-align: center;
-    padding: 10px 0;
+    padding: 10px 20px;
     color: #b6926e;
-    transition: color 0.4s ease;
+    border-radius: 12px;
+    border: 1px solid rgba(182, 146, 110, 0.25);
+    background: rgba(182, 146, 110, 0.06);
+    transition: color 0.4s ease, background 0.4s ease, border-color 0.4s ease;
 }
 
-.status-display.heating  { color: #b6926e; }
-.status-display.brewing  { color: #4caf6a; }
-.status-display.emergency { color: #b84040; animation: pulse 0.8s infinite; }
+.status-display.heating   { color: #b6926e; border-color: rgba(182, 146, 110, 0.25); background: rgba(182, 146, 110, 0.06); }
+.status-display.preinfuse { color: #5ab8d4; border-color: rgba(90, 184, 212, 0.4);  background: rgba(90, 184, 212, 0.08); }
+.status-display.bloom     { color: #4caf6a; border-color: rgba(76, 175, 106, 0.4);  background: rgba(76, 175, 106, 0.08); }
+.status-display.preheat   { color: #d4825a; border-color: rgba(212, 130, 90, 0.4);  background: rgba(212, 130, 90, 0.08); }
+.status-display.brewmax   { color: #c94040; border-color: rgba(201, 64, 64, 0.4);   background: rgba(201, 64, 64, 0.08); }
+.status-display.brewing   { color: #4caf6a; border-color: rgba(76, 175, 106, 0.4);  background: rgba(76, 175, 106, 0.08); }
+.status-display.done      { color: #5a9ed4; border-color: rgba(90, 158, 212, 0.35); background: rgba(90, 158, 212, 0.07); }
+.status-display.steam     { color: #e8e8e8; border-color: rgba(232, 232, 232, 0.35); background: rgba(232, 232, 232, 0.06); }
+.status-display.emergency { color: #b84040; border-color: rgba(184, 64, 64, 0.4);   background: rgba(184, 64, 64, 0.08); animation: pulse 0.8s infinite; }
 
 /* Temperature control row */
 .temp-control-row {
@@ -659,11 +716,21 @@ footer {
     .control-grid-3 { grid-template-columns: 1fr; }
     .temp-control-row { flex-direction: column; align-items: stretch; }
 }
+
+@media (hover: none) and (pointer: coarse) {
+    html { font-size: 130%; }
+    /* keep top-card numbers, status box and card titles at their original rendered size */
+    .value-display .value { font-size: 2.31em; }
+    .value-display .unit  { font-size: 1.15em; }
+    .status-display       { font-size: 1.38em; }
+    .card-title           { font-size: 0.77em; }
+}
 )rawliteral";
 
 const char script_js[] PROGMEM = R"rawliteral(
-let currentTemp = 92.5, setTemp = 93.0, pidOutput = 450, dutyCycle = 45.0, currentPressure = 0.0;
+let currentTemp = 92.5, setTemp = 93.0, pidOutput = 450, dutyCycle = 45.0, currentPressure = 0.0, heaterMode = 'PID';
 if (typeof Chart === 'undefined') { console.error('Chart.js not loaded!'); }
+if (window.matchMedia('(hover: none) and (pointer: coarse)').matches) Chart.defaults.font.size = 14;
 const ctx = document.getElementById('tempChart').getContext('2d');
 const chart = new Chart(ctx, {
     type: 'line',
@@ -712,6 +779,16 @@ function updateDashboard() {
     const dutyBar = document.getElementById('dutyBar');
     dutyBar.style.width = dutyCycle + '%';
     dutyBar.querySelector('.duty-bar-text').textContent = dutyCycle.toFixed(1) + '%';
+    const actualDuty = heaterMode === 'FULL' ? 100.0 : heaterMode === 'OFF' ? 0.0 : dutyCycle;
+    const heaterBar = document.getElementById('heaterBar');
+    if (heaterBar) {
+        heaterBar.style.width = actualDuty + '%';
+        heaterBar.style.background = heaterMode === 'FULL' ? '#2a1508' : '#103715';
+        heaterBar.querySelector('.duty-bar-text').textContent =
+            heaterMode === 'FULL' ? '100%  ▲ FULL ON' :
+            heaterMode === 'OFF'  ? '0%  OFF' :
+            actualDuty.toFixed(1) + '%';
+    }
     const timestamp = new Date().toLocaleTimeString();
     chart.data.labels.push(timestamp);
     chart.data.datasets[0].data.push(currentTemp);
@@ -737,19 +814,21 @@ function fetchRealData() {
         currentTemp = data.currentTemp; setTemp = data.setTemp;
         pidOutput = data.pidOutput; dutyCycle = data.dutyCycle;
         currentPressure = data.pressure || 0.0;
+        heaterMode = data.heaterMode || 'PID';
         dashboardAPI.setConnectionStatus(true);
         dashboardAPI.setRelayError(data.error);
         updateBrewStatus(data.machineState, data.coffeeSubstate, data.errorReason || '');
         updateRelayForceBtn(data.relayForceOff);
-        updateMachineStatus(data.relayForceOff, data.machineState);
+        updateMachineStatus(data.relayForceOff, data.machineState, data.coffeeSubstate);
         updateDiagnostics(data);
+        updateSwitchOverrideUI(data.switchOverride, data.swSteam, data.swCoffee);
         updateDashboard();
     }).catch(e => {
         console.error('Fetch error:', e);
         dashboardAPI.setConnectionStatus(false);
     });
 }
-function updateMachineStatus(emergencyOff, machineState) {
+function updateMachineStatus(emergencyOff, machineState, coffeeSubstate) {
     const el = document.getElementById('machineStatus');
     if (!el) return;
     if (emergencyOff) {
@@ -759,42 +838,45 @@ function updateMachineStatus(emergencyOff, machineState) {
         el.textContent = 'ERROR';
         el.className = 'status-display emergency';
     } else if (machineState === 'COFFEE') {
-        el.textContent = 'Brewing';
-        el.className = 'status-display brewing';
+        const substateMap = {
+            'PREINFUSE': ['Pre-Infuse', 'preinfuse'],
+            'BLOOM':     ['Bloom',      'bloom'],
+            'PREHEAT':   ['Preheat',    'preheat'],
+            'BREW_MAX':  ['Brew Max',   'brewmax'],
+            'BREW_PID':  ['Brewing',    'brewing'],
+            'DONE':      ['Done',       'done'],
+        };
+        const [label, cls] = substateMap[coffeeSubstate] || ['Brewing', 'brewing'];
+        el.textContent = label;
+        el.className = 'status-display ' + cls;
     } else if (machineState === 'STEAM') {
         el.textContent = 'Steam';
-        el.className = 'status-display heating';
+        el.className = 'status-display steam';
     } else {
         el.textContent = 'Heating Up';
         el.className = 'status-display heating';
     }
 }
 function updateBrewStatus(machineState, coffeeSubstate, errorReason) {
-    const badge = document.getElementById('brewStatusBadge');
     const label = document.getElementById('brewStatusLabel');
-    if (!badge || !label) return;
+    if (!label) return;
     const labels = {
-        'PREINFUSE': ['PRE-INFUSE', 'active', 'Pump on \u2014 building pressure through puck'],
-        'BLOOM':     ['BLOOM',      'boost',  'Pump off \u2014 soaking puck, valve holds pressure'],
-        'PREHEAT':   ['PREHEAT',    'boost',  'Full heat burst \u2014 recovering block temperature'],
-        'BREW_MAX':  ['BREW MAX',   'boost',  'Full heat + pump \u2014 countering temperature dip'],
-        'BREW_PID':  ['BREWING',    'active', 'Brew PID active \u2014 maintaining extraction temperature'],
-        'DONE':      ['DONE',       'delay',  'Shot complete \u2014 release coffee switch to return to idle'],
+        'PREINFUSE': 'Pump on \u2014 building pressure through puck',
+        'BLOOM':     'Pump off \u2014 soaking puck, valve holds pressure',
+        'PREHEAT':   'Full heat burst \u2014 recovering block temperature',
+        'BREW_MAX':  'Full heat + pump \u2014 countering temperature dip',
+        'BREW_PID':  'Brew PID active \u2014 maintaining extraction temperature',
+        'DONE':      'Shot complete \u2014 release coffee switch to return to idle',
     };
     if (machineState === 'COFFEE' && labels[coffeeSubstate]) {
-        const [text, cls, desc] = labels[coffeeSubstate];
-        badge.textContent = text; badge.className = 'brew-status-indicator ' + cls;
-        label.textContent = desc;
+        label.textContent = labels[coffeeSubstate];
     } else if (machineState === 'STEAM') {
-        badge.textContent = 'STEAM'; badge.className = 'brew-status-indicator boost';
         label.textContent = 'Steam mode \u2014 hardware thermostat active';
     } else if (machineState === 'ERROR') {
-        badge.textContent = 'ERROR'; badge.className = 'brew-status-indicator delay';
         label.textContent = errorReason
             ? '\u26a0 ' + errorReason + ' \u2014 turn both switches off to acknowledge'
             : 'Safety lockout \u2014 turn both switches off to acknowledge';
     } else {
-        badge.textContent = 'INACTIVE'; badge.className = 'brew-status-indicator';
         label.textContent = 'Idle \u2014 activate coffee switch to start a brew';
     }
 }
@@ -919,6 +1001,77 @@ function resetPIDMemory(btn) {
     }).catch(e => { console.error('PID memory reset error:', e); alert('Failed to reset PID memory'); });
 }
 
+function applyBrewTimings(btn) {
+    const preinfuse = Math.round(parseFloat(document.getElementById('preinfuseSec').value) * 1000);
+    const bloom     = Math.round(parseFloat(document.getElementById('bloomSec').value) * 1000);
+    const preheat   = Math.round(parseFloat(document.getElementById('preheatSec').value) * 1000);
+    const brewMax   = Math.round(parseFloat(document.getElementById('brewMaxSec').value) * 1000);
+    const brewPid      = Math.round(parseFloat(document.getElementById('brewPidSec').value) * 1000);
+    const preinfuseBar = parseFloat(document.getElementById('preinfuseBar').value);
+    if (isNaN(preinfuse)||preinfuse<500||preinfuse>30000) { alert('Pre-infuse: 0.5–30 s'); return; }
+    if (isNaN(bloom)||bloom<500||bloom>30000) { alert('Bloom: 0.5–30 s'); return; }
+    if (isNaN(preheat)||preheat<100||preheat>10000) { alert('Preheat: 0.1–10 s'); return; }
+    if (isNaN(brewMax)||brewMax<100||brewMax>30000) { alert('Brew max: 0.1–30 s'); return; }
+    if (isNaN(brewPid)||brewPid<5000||brewPid>120000) { alert('Brew PID: 5–120 s'); return; }
+    if (isNaN(preinfuseBar)||preinfuseBar<0.5||preinfuseBar>10) { alert('Pre-infuse target: 0.5–10 Bar'); return; }
+    fetch('/api/setBrewTimings', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({preinfuse, bloom, preheat, brewMax, brewPid, preinfuseBar})
+    }).then(r => r.json()).then(() => {
+        const txt = btn.textContent;
+        btn.textContent = 'Applied ✓'; btn.style.backgroundColor = '#103715';
+        setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
+    }).catch(e => { console.error('Apply timings error:', e); alert('Failed to apply timings'); });
+}
+function resetBrewTimings(btn) {
+    if (!confirm('Reset brew timings to factory defaults?')) return;
+    fetch('/api/resetBrewTimings', {
+        method: 'POST', headers: {'Content-Type':'application/json'}
+    }).then(r => r.json()).then(d => {
+        if (d.status === 'ok') {
+            document.getElementById('preinfuseSec').value = (d.preinfuse / 1000).toFixed(1);
+            document.getElementById('bloomSec').value     = (d.bloom / 1000).toFixed(1);
+            document.getElementById('preheatSec').value   = (d.preheat / 1000).toFixed(1);
+            document.getElementById('brewMaxSec').value   = (d.brewMax / 1000).toFixed(1);
+            document.getElementById('brewPidSec').value   = Math.round(d.brewPid / 1000);
+            if (d.preinfuseBar !== undefined) document.getElementById('preinfuseBar').value = d.preinfuseBar.toFixed(1);
+            const txt = btn.textContent;
+            btn.textContent = 'Reset Complete ✓';
+            setTimeout(() => { btn.textContent = txt; }, 2000);
+        }
+    }).catch(e => { console.error('Reset timings error:', e); alert('Failed to reset timings'); });
+}
+function toggleSwitchOverride() {
+    const active = !document.getElementById('swOverrideBtn').classList.contains('forced-off');
+    fetch('/api/setSwitchOverride', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({override: active})
+    }).then(r => r.json()).then(d => {
+        updateSwitchOverrideUI(d.override, d.swSteam, d.swCoffee);
+    }).catch(e => { console.error('Switch override error:', e); });
+}
+function toggleManualSwitch(which) {
+    const btn = document.getElementById(which === 'coffee' ? 'coffeeSwBtn' : 'steamSwBtn');
+    const currentlyOn = btn.textContent.includes('ON');
+    fetch('/api/setSwitch', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({which, on: !currentlyOn})
+    }).then(r => r.json()).then(d => {
+        updateSwitchOverrideUI(true, d.swSteam, d.swCoffee);
+    }).catch(e => { console.error('Set switch error:', e); });
+}
+function updateSwitchOverrideUI(override, swSteam, swCoffee) {
+    const btn = document.getElementById('swOverrideBtn');
+    const controls = document.getElementById('swOverrideControls');
+    const cb = document.getElementById('coffeeSwBtn');
+    const sb = document.getElementById('steamSwBtn');
+    if (!btn) return;
+    if (override) { btn.textContent = 'Override: ON';  btn.classList.add('forced-off'); }
+    else          { btn.textContent = 'Override: OFF'; btn.classList.remove('forced-off'); }
+    if (controls) controls.style.display = override ? 'block' : 'none';
+    if (cb) cb.textContent = 'Coffee Switch: ' + (swCoffee ? 'ON' : 'OFF');
+    if (sb) sb.textContent = 'Steam Switch: '  + (swSteam  ? 'ON' : 'OFF');
+}
 function init() {
     console.log('Dashboard init');
     fetch('/api/getSettings').then(r=>r.json()).then(d=>{
@@ -929,6 +1082,12 @@ function init() {
         document.getElementById('brewKpInput').value = d.brewKp;
         document.getElementById('brewKiInput').value = d.brewKi;
         document.getElementById('brewKdInput').value = d.brewKd;
+        document.getElementById('preinfuseSec').value = (d.preinfuseMs / 1000).toFixed(1);
+        document.getElementById('bloomSec').value     = (d.bloomMs / 1000).toFixed(1);
+        document.getElementById('preheatSec').value   = (d.preheatMs / 1000).toFixed(1);
+        document.getElementById('brewMaxSec').value   = (d.brewMaxMs / 1000).toFixed(1);
+        document.getElementById('brewPidSec').value   = Math.round(d.brewPidMs / 1000);
+        if (d.preinfuseBar !== undefined) document.getElementById('preinfuseBar').value = d.preinfuseBar.toFixed(1);
         updateBuzzerMuteBtn(d.buzzerMute);
     }).catch(e => console.error('Failed to load settings:', e));
     fetchRealData(); setInterval(fetchRealData, 1000);
@@ -1088,6 +1247,7 @@ void handleWebServer() {
                             bool  swCoffee          = state.swCoffee;
                             bool  pumpOn            = state.pumpOn;
                             bool  valveOn           = state.valveOn;
+                            bool  switchOverride    = state.switchManualOverride;
                             MachineState  ms        = state.machineState;
                             CoffeeSubstate cs       = state.coffeeSubstate;
                             char  errorReason[64];
@@ -1104,6 +1264,9 @@ void handleWebServer() {
                                                (cs == COFFEE_BREW_MAX)   ? "BREW_MAX"   :
                                                (cs == COFFEE_BREW_PID)   ? "BREW_PID"   :
                                                (cs == COFFEE_DONE)       ? "DONE"       : "NONE";
+                            HeaterMode hm = getHeaterMode();
+                            const char* hmStr = (hm == HEATER_FULL_ON) ? "FULL" :
+                                               (hm == HEATER_OFF)     ? "OFF"  : "PID";
 
                             String json = "{";
                             json += "\"currentTemp\":"  + String(currentTemp, 1) + ",";
@@ -1120,8 +1283,10 @@ void handleWebServer() {
                             json += "\"machineState\":\"" + String(msStr) + "\",";
                             json += "\"coffeeSubstate\":\"" + String(csStr) + "\",";
                             json += "\"errorReason\":\"" + String(errorReason) + "\",";
-                            json += "\"error\":"        + String(isEmergencyStopActive() ? "true" : "false") + ",";
-                            json += "\"relayForceOff\":" + String(isRelayForceOff() ? "true" : "false");
+                            json += "\"error\":"          + String(isEmergencyStopActive() ? "true" : "false") + ",";
+                            json += "\"relayForceOff\":"  + String(isRelayForceOff() ? "true" : "false") + ",";
+                            json += "\"switchOverride\":" + String(switchOverride ? "true" : "false") + ",";
+                            json += "\"heaterMode\":\"" + String(hmStr) + "\"";
                             json += "}";
 
                             client.println("HTTP/1.1 200 OK");
@@ -1146,7 +1311,13 @@ void handleWebServer() {
                             json += "\"brewKp\":" + String(bkp, 1) + ",";
                             json += "\"brewKi\":" + String(bki, 3) + ",";
                             json += "\"brewKd\":" + String(bkd, 1) + ",";
-                            json += "\"buzzerMute\":" + String(getBuzzerMute() ? "true" : "false");
+                            json += "\"preinfuseMs\":" + String(getPreinfuseMaxMs()) + ",";
+                            json += "\"bloomMs\":"     + String(getBloomMs()) + ",";
+                            json += "\"preheatMs\":"   + String(getPreheatMs()) + ",";
+                            json += "\"brewMaxMs\":"   + String(getBrewMaxMs()) + ",";
+                            json += "\"brewPidMs\":"    + String(getBrewPidMaxMs()) + ",";
+                            json += "\"preinfuseBar\":" + String(getPreinfuseTargetBar(), 2) + ",";
+                            json += "\"buzzerMute\":"  + String(getBuzzerMute() ? "true" : "false");
                             json += "}";
                             client.println("HTTP/1.1 200 OK");
                             client.println("Content-Type: application/json");
@@ -1256,6 +1427,89 @@ void handleWebServer() {
                             client.println();
                             client.println(json);
                             Serial.printf("[WEB] Relay force-off: %s\n", forceOff ? "true" : "false");
+                        }
+                        else if (requestLine.indexOf("POST /api/setSwitchOverride") >= 0) {
+                            bool override = body.indexOf("\"override\":true") >= 0;
+                            STATE_LOCK();
+                            state.switchManualOverride = override;
+                            bool swSteam  = state.swSteam;
+                            bool swCoffee = state.swCoffee;
+                            STATE_UNLOCK();
+                            String json = "{\"status\":\"ok\",\"override\":";
+                            json += override ? "true" : "false";
+                            json += ",\"swSteam\":"  + String(swSteam  ? "true" : "false");
+                            json += ",\"swCoffee\":" + String(swCoffee ? "true" : "false");
+                            json += "}";
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.printf("[WEB] Switch override: %s\n", override ? "ON" : "OFF");
+                        }
+                        else if (requestLine.indexOf("POST /api/setSwitch") >= 0) {
+                            bool on    = body.indexOf("\"on\":true") >= 0;
+                            bool isCoffee = body.indexOf("\"which\":\"coffee\"") >= 0;
+                            bool isSteam  = body.indexOf("\"which\":\"steam\"")  >= 0;
+                            STATE_LOCK();
+                            if (state.switchManualOverride) {
+                                if (isCoffee) state.swCoffee = on;
+                                if (isSteam)  state.swSteam  = on;
+                            }
+                            bool swSteam  = state.swSteam;
+                            bool swCoffee = state.swCoffee;
+                            STATE_UNLOCK();
+                            String json = "{\"status\":\"ok\"";
+                            json += ",\"swSteam\":"  + String(swSteam  ? "true" : "false");
+                            json += ",\"swCoffee\":" + String(swCoffee ? "true" : "false");
+                            json += "}";
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.printf("[WEB] Manual switch: %s=%s\n",
+                                isCoffee ? "coffee" : "steam", on ? "ON" : "OFF");
+                        }
+                        else if (requestLine.indexOf("POST /api/setBrewTimings") >= 0) {
+                            unsigned long preinfuse = PREINFUSE_MAX_TIME_MS;
+                            unsigned long bloom     = BLOOM_TIME_MS;
+                            unsigned long preheat   = PREHEAT_TIME_MS;
+                            unsigned long brewMax   = BREW_MAX_TIME_MS;
+                            unsigned long brewPid   = BREW_PID_MAX_TIME_MS;
+                            int idx; long v;
+                            idx = body.indexOf("\"preinfuse\":"); if (idx >= 0) { v = body.substring(idx + 12).toInt(); if (v >=   500 && v <=  30000) preinfuse = (unsigned long)v; }
+                            idx = body.indexOf("\"bloom\":");    if (idx >= 0) { v = body.substring(idx +  8).toInt(); if (v >=   500 && v <=  30000) bloom     = (unsigned long)v; }
+                            idx = body.indexOf("\"preheat\":"); if (idx >= 0)  { v = body.substring(idx + 10).toInt(); if (v >=   100 && v <=  10000) preheat   = (unsigned long)v; }
+                            idx = body.indexOf("\"brewMax\":"); if (idx >= 0)  { v = body.substring(idx + 10).toInt(); if (v >=   100 && v <=  30000) brewMax   = (unsigned long)v; }
+                            idx = body.indexOf("\"brewPid\":"); if (idx >= 0)  { v = body.substring(idx + 10).toInt(); if (v >= 5000  && v <= 120000) brewPid   = (unsigned long)v; }
+                            setBrewTimings(preinfuse, bloom, preheat, brewMax, brewPid);
+                            { int bidx = body.indexOf("\"preinfuseBar\":"); if (bidx >= 0) { float bv = body.substring(bidx + 15).toFloat(); if (bv >= 0.5f && bv <= 10.0f) setPreinfuseTargetBar(bv); } }
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println("{\"status\":\"ok\"}");
+                            Serial.printf("[WEB] Brew timings: preinfuse=%lu bloom=%lu preheat=%lu brewMax=%lu brewPid=%lu ms\n",
+                                         preinfuse, bloom, preheat, brewMax, brewPid);
+                        }
+                        else if (requestLine.indexOf("POST /api/resetBrewTimings") >= 0) {
+                            resetBrewTimingsToDefaults();
+                            String json = "{";
+                            json += "\"status\":\"ok\",";
+                            json += "\"preinfuse\":" + String(getPreinfuseMaxMs()) + ",";
+                            json += "\"bloom\":"     + String(getBloomMs()) + ",";
+                            json += "\"preheat\":"   + String(getPreheatMs()) + ",";
+                            json += "\"brewMax\":"   + String(getBrewMaxMs()) + ",";
+                            json += "\"brewPid\":"      + String(getBrewPidMaxMs()) + ",";
+                            json += "\"preinfuseBar\":" + String(getPreinfuseTargetBar(), 2);
+                            json += "}";
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.println("[WEB] Brew timings reset to defaults");
                         }
                         else {
                             Serial.println("[WEB] 404: " + requestLine);

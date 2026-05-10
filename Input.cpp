@@ -139,32 +139,34 @@ void syncInputState() {
       if (currentMode == MODE_SET) {
         Serial.printf("→ Sensitivity: %.1f°C (long press)\n", newSensitivity);
       }
-      longPressTriggered = true; // Prevent multiple triggers
-      playLongPress(); // Audible confirmation of sensitivity toggle
+      longPressTriggered = true; // Always set — prevents repeated firing while button is held
+      if (currentMode == MODE_SET) playLongPress(); // Only confirm when action actually happened
     }
   }
 
   // --- 3. HANDLE SWITCH INPUTS (voltage divider ADC on PIN_SWITCHES) ---
-  // Ladder: R_steam=10kΩ, R_coffee=5.1kΩ, R_pd=5.1kΩ to GND; source=5V opto outputs
-  // ADC bands: BOTH(0-631), COFFEE(632-1867), STEAM(1868-3103), NEITHER(3104-4095)
+  // Active-HIGH optos: 0V = neither active, higher voltage = switch(es) active.
+  // ADC bands: NEITHER(0-1048), STEAM(1049-2599), COFFEE(2600-3417), BOTH(3418-4095)
   int adcVal = analogRead(PIN_SWITCHES);
   bool swSteam, swCoffee;
 
-  if (adcVal <= SWITCH_ADC_BOTH_MAX) {
-    swSteam = true;  swCoffee = true;   // Both optos conducting
-  } else if (adcVal <= SWITCH_ADC_COFFEE_MAX) {
-    swSteam = false; swCoffee = true;   // Coffee opto only
+  if (adcVal <= SWITCH_ADC_NEITHER_MAX) {
+    swSteam = false; swCoffee = false;  // Neither opto active
   } else if (adcVal <= SWITCH_ADC_STEAM_MAX) {
     swSteam = true;  swCoffee = false;  // Steam opto only
+  } else if (adcVal <= SWITCH_ADC_COFFEE_MAX) {
+    swSteam = false; swCoffee = true;   // Coffee opto only
   } else {
-    swSteam = false; swCoffee = false;  // Neither
+    swSteam = true;  swCoffee = true;   // Both optos active
   }
 
   float switchVoltage = adcVal * (3.3f / 4095.0f);
 
   STATE_LOCK();
-  state.swSteam       = swSteam;
-  state.swCoffee      = swCoffee;
+  if (!state.switchManualOverride) {
+    state.swSteam  = swSteam;
+    state.swCoffee = swCoffee;
+  }
   state.switchVoltage = switchVoltage;
   STATE_UNLOCK();
 }

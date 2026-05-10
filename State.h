@@ -48,6 +48,8 @@ struct SystemState {
     float pressureVoltage = 0.0f;   // Voltage at PIN_PRESSURE GPIO (V, before divider reversal)
     bool pumpOn = false;
     bool valveOn = false;
+    // Temporary: allow web GUI to drive swSteam/swCoffee while optos are not installed
+    bool switchManualOverride = false;
 };
 
 extern SystemState state; // Tell the world this variable exists

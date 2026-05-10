@@ -7,11 +7,18 @@
 // =====================================================================
 // NOTE FREQUENCIES (Hz)
 // =====================================================================
+#define NOTE_CS4 277
+#define NOTE_D4  294
 #define NOTE_E4  330
 #define NOTE_F4  349
+#define NOTE_FS4 370
+#define NOTE_GS4 415
 #define NOTE_A4  440
 #define NOTE_B4  494
 #define NOTE_C5  523
+#define NOTE_CS5 554
+#define NOTE_D5  587
+#define NOTE_E5  659
 #define REST     0
 
 // =====================================================================
@@ -30,10 +37,11 @@ void playStartupJingle();
 void playButtonClick();    // Short press feedback
 void playLongPress();      // Long press sensitivity toggle confirmed
 void playEncoderTick();    // Encoder step in SET mode
-void playBrewToggle();     // Brew mode on/off
+void playBrewStart();      // Brew entry: D→A ascending two-note
+void playBrewEnd();        // Brew exit:  A→D descending two-note
 
 // Non-blocking siren: call repeatedly from display/control loop
-// Pass isEmergencyStopActive() as argument
+// Pass true to activate (e.g. isEmergencyStopActive() || machState == STATE_ERROR)
 void updateSiren(bool active);
 
 #endif // BUZZER_H

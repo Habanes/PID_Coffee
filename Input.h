@@ -4,6 +4,6 @@
 #include "Config.h"
 
 void setupInput();
-void syncInputState(); // Called in the main loop to read the results
+void syncInputState(); // Called from TaskControl (Core 1) every 100ms
 
 #endif

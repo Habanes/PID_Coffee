@@ -35,7 +35,7 @@ void setupDisplay() {
     byte digitPins[]   = {PIN_DISP_DIGIT1, PIN_DISP_DIGIT2, PIN_DISP_DIGIT3, PIN_DISP_DIGIT4};
     byte segmentPins[] = {PIN_DISP_A, PIN_DISP_B, PIN_DISP_C, PIN_DISP_D, PIN_DISP_E, PIN_DISP_F, PIN_DISP_G, PIN_DISP_DP};
 
-    // 2. Configure Library
+    // Configure Library
     bool resistorsOnSegments = false; // Usually resistors are on segments
     byte hardwareConfig = COMMON_ANODE; // IMPORTANT: Matches your schematic
     bool updateWithDelays = false; // Default 'false' is recommended
@@ -48,26 +48,25 @@ void setupDisplay() {
     sevseg.setBrightness(DISPLAY_BRIGHTNESS);
 }
 
-// Helper function to convert temperature to segment patterns
-void setTempWithMode(float temp, byte modeChar) {
-    // Create array for all 4 digits
+// Convert temperature to segment patterns: [modeChar][XX.X] below 100°C, [modeChar][XXX] above
+static void setTempWithMode(float temp, byte modeChar) {
     byte segments[4];
-    
-    // First digit is the mode character
     segments[0] = modeChar;
-    
-    // Convert temperature to XX.X format (3 digits)
-    int tempInt = (int)(temp * 10); // e.g., 93.5 -> 935
-    
-    // Extract digits: 935 -> 9, 3, 5
-    int digit1 = (tempInt / 100) % 10;
-    int digit2 = (tempInt / 10) % 10;
-    int digit3 = tempInt % 10;
-    
-    segments[1] = digitSegments[digit1];
-    segments[2] = digitSegments[digit2] | 0b10000000; // Add decimal point
-    segments[3] = digitSegments[digit3];
-    
+
+    if (temp >= 100.0f) {
+        // 3-digit integer: drop decimal to fit [mode][d1][d2][d3]
+        int t = (int)temp;
+        segments[1] = digitSegments[(t / 100) % 10];
+        segments[2] = digitSegments[(t / 10)  % 10];
+        segments[3] = digitSegments[ t        % 10];
+    } else {
+        int tempInt = (int)(temp * 10);
+        if (tempInt < 0) tempInt = 0; // clamp: negative index into digitSegments is UB
+        segments[1] = digitSegments[(tempInt / 100) % 10];
+        segments[2] = digitSegments[(tempInt / 10)  % 10] | 0b10000000; // decimal point
+        segments[3] = digitSegments[ tempInt        % 10];
+    }
+
     sevseg.setSegments(segments);
 }
 
@@ -89,8 +88,8 @@ void refreshDisplay() {
         MachineState   machState   = state.machineState;
         STATE_UNLOCK();
 
-        // Siren when emergency stop is active
-        updateSiren(isEmergencyStopActive());
+        // Siren on emergency stop OR any ERROR state (includes pressure over-limit)
+        updateSiren(isEmergencyStopActive() || machState == STATE_ERROR);
 
         // STATE_COFFEE: blink 'b' at 1Hz using DISPLAY_BLINK_CYCLE_MS
         if (machState == STATE_COFFEE) {
@@ -134,48 +133,57 @@ void refreshDisplay() {
                 break;
                 
             case MODE_SET:
-                // Show set temperature with 'S' in first digit (S XX.X)
+                // Show set temperature with 'S' in first digit (S XX.X or S XXX above 100°C)
                 // Add blinking at 2Hz with 30% OFF duty cycle to show which digit is being edited
                 {
                     static unsigned long lastBlink = 0;
                     static bool blinkState = false;
-                    
+
                     // Toggle blink state at 2Hz (500ms cycle) with 30% off time (150ms off, 350ms on)
                     const unsigned long offTime = DISPLAY_BLINK_CYCLE_MS * DISPLAY_BLINK_OFF_RATIO;
                     const unsigned long onTime  = DISPLAY_BLINK_CYCLE_MS - offTime;
-                    
+
                     if (millis() - lastBlink > (blinkState ? offTime : onTime)) {
                         blinkState = !blinkState;
                         lastBlink = millis();
                     }
-                    
-                    // Create array for all 4 digits
+
                     byte segments[4];
-                    segments[0] = CHAR_S;  // Mode indicator
-                    
-                    // Convert temperature to XX.X format (using local copy)
-                    int tempInt = (int)(setTemp * 10);
-                    int digit1 = (tempInt / 100) % 10;  // Tens digit
-                    int digit2 = (tempInt / 10) % 10;   // Ones digit
-                    int digit3 = tempInt % 10;          // Decimal digit
-                    
-                    // Normal display
-                    segments[1] = digitSegments[digit1];
-                    segments[2] = digitSegments[digit2] | 0b10000000; // Add decimal point
-                    segments[3] = digitSegments[digit3];
-                    
-                    // Blink the digit being edited (based on tempSensitivity)
-                    if (blinkState) {
-                        if (sensitivity >= SENSITIVITY_THRESHOLD) {
-                            // Editing whole degrees - blink tens and ones digits
-                            segments[1] = 0;  // Blank tens digit
-                            segments[2] = 0b10000000;  // Keep only decimal point
-                        } else {
-                            // Editing decimal - blink decimal digit
-                            segments[3] = 0;  // Blank decimal digit
+                    segments[0] = CHAR_S;
+
+                    if (setTemp >= 100.0f) {
+                        // 3-digit integer: [S][d1][d2][d3], no decimal
+                        int t = (int)setTemp;
+                        segments[1] = digitSegments[(t / 100) % 10];
+                        segments[2] = digitSegments[(t / 10)  % 10];
+                        segments[3] = digitSegments[ t        % 10];
+                        if (blinkState) {
+                            if (sensitivity >= SENSITIVITY_THRESHOLD) {
+                                segments[1] = 0;
+                                segments[2] = 0;
+                            } else {
+                                segments[3] = 0;
+                            }
+                        }
+                    } else {
+                        // XX.X format
+                        int tempInt = (int)(setTemp * 10);
+                        int digit1 = (tempInt / 100) % 10;
+                        int digit2 = (tempInt / 10)  % 10;
+                        int digit3 =  tempInt        % 10;
+                        segments[1] = digitSegments[digit1];
+                        segments[2] = digitSegments[digit2] | 0b10000000;
+                        segments[3] = digitSegments[digit3];
+                        if (blinkState) {
+                            if (sensitivity >= SENSITIVITY_THRESHOLD) {
+                                segments[1] = 0;
+                                segments[2] = 0b10000000;
+                            } else {
+                                segments[3] = 0;
+                            }
                         }
                     }
-                    
+
                     sevseg.setSegments(segments);
                 }
                 break;
