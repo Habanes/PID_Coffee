@@ -188,14 +188,16 @@ const char index_html[] PROGMEM = R"rawliteral(
             <div class="diag-grid">
                 <div class="diag-section">
                     <div class="diag-section-title">Inputs</div>
-                    <div class="diag-row"><span class="diag-label">SW pin voltage</span><span class="diag-value" id="diagSwitchV">&mdash;</span></div>
-                    <div class="diag-row"><span class="diag-label">Pressure pin voltage</span><span class="diag-value" id="diagPressureV">&mdash;</span></div>
-                    <div class="diag-row"><span class="diag-label">Calculated pressure</span><span class="diag-value" id="diagPressure">&mdash;</span></div>
-                    <div class="diag-row"><span class="diag-label">SW STEAM</span><span id="diagSwSteam" class="diag-led off">OFF</span></div>
-                    <div class="diag-row"><span class="diag-label">SW COFFEE</span><span id="diagSwCoffee" class="diag-led off">OFF</span></div>
+                    <div class="diag-row"><span class="diag-label">Temperature</span><span class="diag-value" id="diagTemp">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Switch Pin Voltage</span><span class="diag-value" id="diagSwitchV">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Pressure Pin Voltage</span><span class="diag-value" id="diagPressureV">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Calculated Pressure</span><span class="diag-value" id="diagPressure">&mdash;</span></div>
+                    <div class="diag-row"><span class="diag-label">Switch Steam</span><span id="diagSwSteam" class="diag-led off">OFF</span></div>
+                    <div class="diag-row"><span class="diag-label">Switch Coffee</span><span id="diagSwCoffee" class="diag-led off">OFF</span></div>
                 </div>
                 <div class="diag-section">
                     <div class="diag-section-title">Outputs</div>
+                    <div class="diag-row"><span class="diag-label">Heating SSR</span><span class="diag-value" id="diagHeater">&mdash;</span></div>
                     <div class="diag-row"><span class="diag-label">Pump</span><span id="diagPump" class="diag-led off">OFF</span></div>
                     <div class="diag-row"><span class="diag-label">Valve</span><span id="diagValve" class="diag-led off">OFF</span></div>
                 </div>
@@ -899,11 +901,13 @@ function updateDiagnostics(d) {
         el.className = 'diag-led ' + (on ? 'on' : 'off');
         el.textContent = on ? 'ON' : 'OFF';
     }
-    set('diagSwitchV',  (d.switchV  !== undefined) ? d.switchV.toFixed(3)  + ' V' : '—');
-    set('diagPressureV',(d.pressureV !== undefined) ? d.pressureV.toFixed(3) + ' V' : '—');
-    set('diagPressure', (d.pressure  !== undefined) ? d.pressure.toFixed(2)  + ' Bar' : '—');
+    set('diagTemp',     (d.currentTemp  !== undefined) ? d.currentTemp.toFixed(1)  + ' °C' : '—');
+    set('diagSwitchV',  (d.switchV      !== undefined) ? d.switchV.toFixed(3)      + ' V'  : '—');
+    set('diagPressureV',(d.pressureV    !== undefined) ? d.pressureV.toFixed(3)    + ' V'  : '—');
+    set('diagPressure', (d.pressure     !== undefined) ? d.pressure.toFixed(2)     + ' Bar': '—');
     led('diagSwSteam',  d.swSteam);
     led('diagSwCoffee', d.swCoffee);
+    set('diagHeater',   d.heaterMode || '—');
     led('diagPump',     d.pumpOn);
     led('diagValve',    d.valveOn);
 }
