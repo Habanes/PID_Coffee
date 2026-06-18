@@ -2,204 +2,257 @@
 #define CONFIG_H
 
 // =====================================================================
-// PIN MAPPING
+// CoffeePID - QuickMill Orione 3000  |  central configuration
+// One place for every pin, constant, default and settable range.
+// See ../Architecture.txt, ../Processes.txt, ../FreeRTOS Management.txt.
 // =====================================================================
 
-// SSR relay
-#define RELAY_PIN               14
-
-// TSIC 306 temperature sensor (ZACWire protocol)
-#define TSIC_SIGNAL_PIN         21
-
-// Rotary encoder
-#define PIN_IN1                 6   // Signal A
-#define PIN_IN2                 5   // Signal B
-#define PIN_BTN                 4   // Push button
-
-// Switch input ADC — both optocouplers share one ADC pin via resistor ladder
-// Ladder: R_steam=10kΩ → node, R_coffee=5.1kΩ → node, R_pulldown=5.1kΩ → GND; Vsrc=5V
-#define PIN_SWITCHES            2   // ADC: SW_STEAM + SW_COFFEE voltage divider
-#define PIN_PRESSURE            1   // ADC: pressure transducer (voltage divider R1=2.2k R2=5.1k)
-
-// Pump and valve outputs (active LOW — low-side transistor switches, 5V load)
-#define PIN_PUMP                38
-#define PIN_VALVE               48
-
-// Buzzer
-#define BUZZER_PIN              47
-#define BUZZER_MUTE             false   // Set true to silence all buzzer output
-
-// 7-Segment display — digit enable pins (common anode, active HIGH)
-#define PIN_DISP_DIGIT1         3
-#define PIN_DISP_DIGIT2         11
-#define PIN_DISP_DIGIT3         12
-#define PIN_DISP_DIGIT4         8
-
-// 7-Segment display — segment pins (A, B, C, D, E, F, G, DP)
-#define PIN_DISP_A              9
-#define PIN_DISP_B              13
-#define PIN_DISP_C              17
-#define PIN_DISP_D              15
-#define PIN_DISP_E              7
-#define PIN_DISP_F              10
-#define PIN_DISP_G              18
-#define PIN_DISP_DP             16
-
-// Display brightness (0–100)
-#define DISPLAY_BRIGHTNESS      90
 
 // =====================================================================
-// DISPLAY
+// 1. PIN MAP                                    (see ../Hardware IO.txt)
 // =====================================================================
 
-#define DISPLAY_UPDATE_MS           100     // Content refresh interval (ms)
-#define DISPLAY_BLINK_CYCLE_MS      500     // SET mode blink period (ms, 2 Hz)
-#define DISPLAY_BLINK_OFF_RATIO     0.3f    // Fraction of blink cycle that is off (30%)
-#define DISPLAY_IP_SCROLL_MS        500     // IP address scroll speed in DEBUG mode (ms)
+// Outputs
+#define PIN_HEATER_SSR      14      // Solid-state relay (time-proportional)
+#define PIN_PUMP            38      // Pump   - active LOW
+#define PIN_VALVE           48      // Valve  - active LOW
+#define PIN_BUZZER          47
+
+// Inputs
+#define PIN_TSIC            21      // TSIC temperature sensor (ZACWire)
+#define PIN_PRESSURE         1      // Pressure transducer (ADC)
+#define PIN_SWITCHES         2      // Steam + coffee combined ladder (ADC)
+#define PIN_ENC_A            6      // Rotary encoder signal A
+#define PIN_ENC_B            5      // Rotary encoder signal B
+#define PIN_BTN              4      // Rotary push button (active LOW)
+
+// 7-segment display (4 digit, common anode)
+#define PIN_DISP_DIGIT1      3
+#define PIN_DISP_DIGIT2     11
+#define PIN_DISP_DIGIT3     12
+#define PIN_DISP_DIGIT4      8
+#define PIN_DISP_SEG_A       9
+#define PIN_DISP_SEG_B      13
+#define PIN_DISP_SEG_C      17
+#define PIN_DISP_SEG_D      15
+#define PIN_DISP_SEG_E       7
+#define PIN_DISP_SEG_F      10
+#define PIN_DISP_SEG_G      18
+#define PIN_DISP_SEG_DP     16
+
 
 // =====================================================================
-// INPUT
+// 2. RTOS TASKS                          (see ../FreeRTOS Management.txt)
 // =====================================================================
 
-#define BTN_DEBOUNCE_MS         50      // Button debounce time (ms)
-#define BTN_LONG_PRESS_MS       500     // Long press threshold (ms)
-#define SETTEMP_MIN             0.0f    // Minimum allowed setpoint (°C)
-#define SETTEMP_MAX             120.0f  // Maximum allowed setpoint (°C)
-#define SENSITIVITY_FINE        0.1f    // Fine encoder sensitivity (°C/step)
-#define SENSITIVITY_COARSE      1.0f    // Coarse encoder sensitivity (°C/step)
-#define SENSITIVITY_THRESHOLD   0.5f    // Midpoint for sensitivity toggle
+#define STARTUP_DELAY_MS            2000
 
-// Switch ADC decode thresholds (12-bit 0–4095, Vref=3.3V)
-// Active-HIGH optos: 0V = neither active, higher voltage = switch(es) active.
-// Ladder voltages: NEITHER=0.000V(0), STEAM=1.689V(2096), COFFEE=2.500V(3101), BOTH=3.008V(3733)
-// Thresholds at midpoints between adjacent states.
-#define SWITCH_ADC_NEITHER_MAX  1048    //    0 – 1048 → neither pressed (0V)
-#define SWITCH_ADC_STEAM_MAX    2599    // 1049 – 2599 → steam only     (~1.7V)
-#define SWITCH_ADC_COFFEE_MAX   3417    // 2600 – 3417 → coffee only    (~2.5V)
-                                        // 3418 – 4095 → both pressed   (~3.0V)
+// ControlTask - Core 1, real-time control loop @ 10 Hz
+#define TASK_CONTROL_CORE           1
+#define TASK_CONTROL_PRIORITY       3
+#define TASK_CONTROL_STACK          4096
+#define TASK_CONTROL_CYCLE_MS       100     // 10 Hz
 
-// =====================================================================
-// SAFETY LIMITS
-// =====================================================================
+// UiTask - Core 0, 7-seg refresh + input + buzzer
+#define TASK_UI_CORE                0
+#define TASK_UI_PRIORITY            2
+#define TASK_UI_STACK               4096
+#define TASK_UI_CYCLE_MS            2
 
-#define EMERGENCY_STOP_TEMP     100.0   // Heater cut-off temperature (°C)
-#define TEMP_MIN_VALID          5.0     // Below this is treated as a sensor fault (°C)
-#define TEMP_MAX_VALID          150.0   // Above this is treated as a sensor fault (°C)
-#define MAX_CONSECUTIVE_FAILURES 3      // Consecutive bad readings before sensorError is set
+// WebTask - Core 0, HTTP server
+#define TASK_WEB_CORE               0
+#define TASK_WEB_PRIORITY           1
+#define TASK_WEB_STACK              8192
+#define TASK_WEB_CYCLE_MS           10
+
 
 // =====================================================================
-// SENSOR
+// 3. SWITCH STATE MACHINE                          (process 1)
+// Measured pin voltages: both-on ~0V, steam ~0.85V, coffee ~1.6V,
+// both-off ~3.3V. Thresholds at the band midpoints (ADC 0..4095 @ 3.3V).
+// Decode ascending: v<=L1 BOTH, v<=L2 STEAM, v<=L3 COFFEE, else NEITHER.
+// (ADC is non-linear / ref varies - tune these on real hardware.)
 // =====================================================================
 
-// EMA smoothing factor for raw TSIC readings (0 = maximum smoothing, 1 = no smoothing / raw pass-through)
-#define EMA_ALPHA               0.6f
+#define SWITCH_LEVEL_1_ADC      534     // 0.43 V  border BOTH | STEAM
+#define SWITCH_LEVEL_2_ADC      1526    // 1.23 V  border STEAM | COFFEE
+#define SWITCH_LEVEL_3_ADC      3040    // 2.45 V  border COFFEE | NEITHER
+#define SWITCH_DEBOUNCE_MS      600     // band must be stable this long
 
-// Seed value for EMA filter on startup (room temperature assumption)
-#define SENSOR_EMA_SEED_TEMP    20.0f
-
-// Minimum interval between sensor error log prints (ms)
-#define SENSOR_ERROR_LOG_MS     1000
-
-// How long (ms) the sensor can go without a valid reading before triggering ERROR
-#define SENSOR_TIMEOUT_MS       5000
-
-// Pressure transducer (GPIO PIN_PRESSURE = 1)
-// Wiring: sensor OUT → R1=2.2kΩ → GPIO, R2=5.1kΩ → GND (Vgpio_max = 3.144V @ 4.5V out)
-// Sensor output range: 0.5V = 0 Bar, 4.5V = PRESSURE_RANGE_BAR (ratiometric, 5V supply)
-#define PRESSURE_RANGE_BAR          16.0f   // Full-scale Bar — MUST match the ordered sensor range
-#define PRESSURE_DIVIDER_RATIO      0.6986f // R2/(R1+R2) = 5100/(2200+5100)
-#define PRESSURE_SENSOR_V_LOW       0.5f    // Sensor output voltage at 0 Bar
-#define PRESSURE_SENSOR_V_HIGH      4.5f    // Sensor output voltage at full scale
-#define PRESSURE_ADC_SAMPLES        4       // Samples averaged per read to reduce ADC noise
 
 // =====================================================================
-// CONTROLS
+// 4. TEMPERATURE SENSOR                            (process 2)
+// NOTE: TSIC 306 tops out around 150 C, so ALL steam-related limits are kept
+//       below 150 (steamTargetTemp default 130, steamTempMax 145). The sensor
+//       can read them, so the bang-bang cutoff AND the over-temp trip / ISR
+//       cutoff all work within range.
 // =====================================================================
 
-#define SSR_WINDOW_MS               1000    // Time-proportional SSR window size (ms)
-#define PID_TIMER_INTERVAL_MS       10      // Hardware timer ISR interval (ms, = 100 Hz)
-#define EMERGENCY_STOP_HYSTERESIS   5.0     // °C below setpoint before emergency stop clears
-#define CONTROLS_DEBUG_MS           1000    // Interval for serial PID debug output (ms)
+#define EMA_ALPHA               0.6f    // EMA smoothing (1 = raw, 0 = max)
+#define EMA_SEED                20.0f   // Startup seed (room temp)
+#define TEMP_MIN_VALID          0.0f    // Below -> sensor glitch
+#define TEMP_MAX_VALID          180.0f  // Above -> sensor glitch
+#define TEMP_ERROR_INTERVAL_MS  1000    // Bad (absent/invalid) this long -> error
+
 
 // =====================================================================
-// WEB SERVER
+// 5. PRESSURE SENSOR                               (process 3)
+// Wiring: sensor OUT -> R1=2.2k -> GPIO, R2=5.1k -> GND. Ratiometric 5V:
+// 0.5 V = 0 Bar, 4.5 V = full scale. No fault flag (over-range trips
+// safePressureMax on its own).
 // =====================================================================
 
-// WiFi credentials (station mode)
-#define WIFI_SSID                   "BabaLan"
-#define WIFI_PASSWORD               "bittegibmirinternet"
+#define PRESSURE_RANGE_BAR      16.0f   // Full-scale Bar (match ordered sensor)
+#define PRESSURE_DIVIDER_RATIO  0.6986f // R2/(R1+R2) = 5100/7300
+#define PRESSURE_SENSOR_V_LOW   0.5f    // Sensor output at 0 Bar
+#define PRESSURE_SENSOR_V_HIGH  4.5f    // Sensor output at full scale
+#define PRESSURE_ADC_SAMPLES    4       // Samples averaged per read
 
-// Fallback AP credentials (used when station connect fails)
-#define AP_SSID                     "QuickMill-PID"
-#define AP_PASSWORD                 "espresso123"
-
-#define WEBSERVER_PORT              80      // HTTP server port
-
-#define WIFI_CONNECT_ATTEMPTS       20      // Max attempts before falling back to AP mode
-#define WIFI_CONNECT_DELAY_MS       500     // Delay between connection attempts (ms)
-#define WEB_BODY_READ_TIMEOUT_MS    1000    // Timeout waiting for POST body (ms)
-#define WEB_SEND_BUFFER_SIZE        1024    // Chunk size for PROGMEM file transfer (bytes)
 
 // =====================================================================
-// RTOS TASKS
+// 6. HEATER OUTPUT + PID                           (processes 5, 6)
 // =====================================================================
 
-#define STARTUP_DELAY_MS            2000    // Boot delay before setup runs (ms)
-#define TASK_DISPLAY_CYCLE_MS       2       // Display refresh interval (ms)
-#define TASK_CONTROL_CYCLE_MS       100     // Control loop interval (ms, = 10 Hz)
-#define TASK_WEBSERVER_CYCLE_MS     10      // Web server poll interval (ms)
+#define SSR_WINDOW_MS           1000    // Time-proportional SSR window
+#define HEATER_TIMER_INTERVAL_MS 10     // ISR period (= 100 Hz)
+#define PID_IMAX                55.0     // Integrator clamp
+#define PID_EMA_FACTOR          0.6      // EMA on PID derivative input
 
-#define TASK_DISPLAY_STACK          4096    // Stack size for display task (bytes)
-#define TASK_CONTROL_STACK          4096    // Stack size for control task (bytes)
-#define TASK_WEBSERVER_STACK        8192    // Stack size for web server task (bytes)
-
-#define TASK_DISPLAY_PRIORITY       1       // FreeRTOS priority for display task
-#define TASK_CONTROL_PRIORITY       2       // FreeRTOS priority for control task (highest)
-#define TASK_WEBSERVER_PRIORITY     1       // FreeRTOS priority for web server task
 
 // =====================================================================
-// STATE MACHINE
+// 7. LIMITS                                        (process 4)
+// Mode-aware over-temp: coffeeTempMax in COFFEE, steamTempMax in IDLE/STEAM.
+// (coffeeTempMax + steamTempMax are SETTINGS - defaults in section 11.)
 // =====================================================================
 
-// Safety cutoffs — trigger ERROR state, require user acknowledgment to clear
-#define SAFE_TEMP_MAX               150.0f  // Max block temp before ERROR (°C)
-#define SAFE_PRESSURE_MAX           14.0f   // Max pressure before ERROR (Bar)
+#define BREW_READY_TEMP         98.0f   // Block must be <= this to START a shot
+#define STEAM_HYSTERESIS        5.0f    // Steam bang-bang band below target
+#define ERROR_CLEAR_HYSTERESIS  5.0f    // Temp must drop this far below limit
+                                        // before ERROR can clear
 
-// Brew interlock — block must cool below this before COFFEE state is allowed
-#define BREW_MAX_TEMP               98.0f   // °C
+// Over-limit trips must persist this long before tripping ERROR, so a brief
+// sensor spike does not cause a false error (feature spec: temp/pressure
+// error intervals).
+#define OVERTEMP_TRIP_MS        300
+#define OVERPRESSURE_TRIP_MS    100
 
-// Brew substate timers (milliseconds)
-#define PREINFUSE_MAX_TIME_MS       3000    // Max pre-infusion before forced transition
-#define BLOOM_TIME_MS               5000    // Bloom (puck soak) duration
-#define PREHEAT_TIME_MS             2000    // Pre-heat burst before pump restarts
-#define BREW_MAX_TIME_MS            8000    // Full-heat + pump phase to counter temp dip
-#define BREW_PID_MAX_TIME_MS        60000   // Max PID brew time before DONE
-
-// Pressure threshold to end pre-infusion early (Bar)
-#define PREINFUSE_TARGET_PRESS      2.5f
 
 // =====================================================================
-// PID DEFAULTS — General
+// 8. INPUT / ENCODER / MENU                        (process 7)
+// On-device menu is IDLE-only. Encoder edits the active preset's coffee
+// target temp and shot time, and selects the preset.
 // =====================================================================
 
-#define DEFAULT_IMAX            55.0        // Integrator clamp (max integral contribution, ms)
-#define DEFAULT_EMA_FACTOR      0.6         // EMA smoothing on PID derivative input
-#define DEFAULT_TARGET_TEMP     93.0        // Default setpoint (°C)
+#define BTN_DEBOUNCE_MS         50
+#define BTN_LONG_PRESS_MS       500
+#define COFFEE_TEMP_STEP        0.5f    // Encoder step in SET_COFFEE view (C)
+#define SHOT_TIME_STEP_MS       1000    // Encoder step in TIMER view (1 s)
+
 
 // =====================================================================
-// PID DEFAULTS — Heating Mode
+// 9. BUZZER TONES                                  (process 11)
+// Enter COFFEE/STEAM: ascending perfect fifth (A4->E5). Exit: descending.
+// ERROR: repeating beep-boop siren. All playback non-blocking.
 // =====================================================================
 
-#define DEFAULT_KP              62.0
-#define DEFAULT_KI              1.19        // = Kp / Tn  (62.0 / 52.0)
-#define DEFAULT_KD              713.0       // = Tv * Kp  (11.5 * 62.0)
+#define BUZZER_DEFAULT_MUTE     false
+
+#define TONE_TICK_HZ            2000     // Encoder step click
+#define TONE_CLICK_HZ          1500     // Button press click
+#define TONE_FIFTH_LOW_HZ       440      // A4  (enter low / exit high target)
+#define TONE_FIFTH_HIGH_HZ      659      // E5  (enter high / exit low target)
+#define TONE_SIREN_HI_HZ        880      // Error "beep"
+#define TONE_SIREN_LO_HZ        660      // Error "boop"
+#define TONE_CLICK_MS           15
+#define TONE_NOTE_MS            140      // Per note in the enter/exit jingles
+#define TONE_SIREN_MS           250      // Per siren tone
+
 
 // =====================================================================
-// PID DEFAULTS — Brew Mode
+// 10. WIFI / WEB                                   (process 9)
+// NOTE: fill in real credentials locally - do NOT commit secrets.
 // =====================================================================
 
-#define DEFAULT_BREW_KP             50.0
-#define DEFAULT_BREW_KI             0.0     // Integral disabled during brew
-#define DEFAULT_BREW_KD             1000.0  // = Tv * Kp  (20.0 * 50.0)
+#define WIFI_SSID               "YOUR_WIFI_SSID"
+#define WIFI_PASSWORD           "YOUR_WIFI_PASSWORD"
+#define AP_SSID                 "QuickMill-PID"
+#define AP_PASSWORD             "changeme123"
+
+#define WEBSERVER_PORT          80
+#define WIFI_CONNECT_ATTEMPTS   20
+#define WIFI_CONNECT_DELAY_MS   500
+#define WEB_BODY_READ_TIMEOUT_MS 1000
+#define WEB_SEND_BUFFER_SIZE    1024
+
+
+// =====================================================================
+// 11. SETTINGS - DEFAULTS & RANGES
+// Written only via the config layer (web GUI / 7-seg menu), IDLE-only,
+// validated against the *_MIN / *_MAX bounds, persisted to NVS.
+// =====================================================================
+
+#define NUM_PRESETS             3
+#define NVS_NAMESPACE           "coffee-pid"
+
+// ---- Global: heating PID ----
+#define DEFAULT_HEATING_KP      62.0
+#define DEFAULT_HEATING_KI      1.19
+#define DEFAULT_HEATING_KD      713.0
+// ---- Global: brew PID (Ki disabled during brew) ----
+#define DEFAULT_BREW_KP         50.0
+#define DEFAULT_BREW_KI         0.0
+#define DEFAULT_BREW_KD         1000.0
+// shared PID gain bounds
+#define PID_KP_MIN              0.0
+#define PID_KP_MAX              500.0
+#define PID_KI_MIN              0.0
+#define PID_KI_MAX              50.0
+#define PID_KD_MIN              0.0
+#define PID_KD_MAX              2000.0
+
+// ---- Global: sensor offset (subtracted at the temperature process) ----
+#define DEFAULT_TEMP_OFFSET     5.0f
+#define TEMP_OFFSET_MIN         0.0f
+#define TEMP_OFFSET_MAX         10.0f
+
+// ---- Global: safety limits ----
+#define DEFAULT_COFFEE_TEMP_MAX 110.0f  // ERROR in COFFEE
+#define COFFEE_TEMP_MAX_MIN     100.0f
+#define COFFEE_TEMP_MAX_MAX     140.0f
+#define DEFAULT_STEAM_TEMP_MAX  145.0f  // ERROR in IDLE/STEAM + ISR cutoff (< 150 sensor ceiling)
+#define STEAM_TEMP_MAX_MIN      130.0f
+#define STEAM_TEMP_MAX_MAX      149.0f
+#define DEFAULT_SAFE_PRESSURE_MAX 14.0f
+#define SAFE_PRESSURE_MAX_MIN   1.0f
+#define SAFE_PRESSURE_MAX_MAX   16.0f
+
+// ---- Per-preset: targets ----
+#define DEFAULT_COFFEE_TARGET_TEMP 93.0f
+#define COFFEE_TARGET_TEMP_MIN  80.0f
+#define COFFEE_TARGET_TEMP_MAX  100.0f
+#define DEFAULT_STEAM_TARGET_TEMP 130.0f
+#define STEAM_TARGET_TEMP_MIN   115.0f
+#define STEAM_TARGET_TEMP_MAX   135.0f
+
+// ---- Per-preset: brew timings (ms) ----
+#define DEFAULT_PREINFUSE_MAX_MS 3000
+#define DEFAULT_BLOOM_MS        5000
+#define DEFAULT_PREHEAT_MS      2000
+#define DEFAULT_BREW_MAX_MS     8000
+#define DEFAULT_SHOT_MS         30000   // TOTAL brew time (continuous from start)
+#define BREW_TIME_MIN_MS        100
+#define BREW_TIME_MAX_MS        120000
+#define SHOT_TIME_MIN_MS        10000
+#define SHOT_TIME_MAX_MS        120000
+
+// ---- Per-preset: pre-infuse early-exit pressure ----
+#define DEFAULT_PREINFUSE_TARGET_BAR 2.5f
+#define PREINFUSE_TARGET_BAR_MIN 0.5f
+#define PREINFUSE_TARGET_BAR_MAX 10.0f
+
+// Coherence (enforced in Settings validation, see ../Architecture.txt):
+//   coffeeTempMax >= coffeeTargetTemp + ~10
+//   steamTempMax  >= steamTargetTemp  + ~10
+//   shotTimeMs    >= brewMaxTimeMs
 
 #endif // CONFIG_H

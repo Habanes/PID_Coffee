@@ -1,172 +1,79 @@
 #include "Input.h"
 #include "State.h"
-#include "Controls.h"
+#include "Settings.h"
+#include "Config.h"
 #include "Buzzer.h"
 #include <RotaryEncoder.h>
 
-// --- LIBRARY SETUP ---
-RotaryEncoder encoder(PIN_IN1, PIN_IN2, RotaryEncoder::LatchMode::TWO03);
+static RotaryEncoder encoder(PIN_ENC_A, PIN_ENC_B, RotaryEncoder::LatchMode::TWO03);
+static void IRAM_ATTR encoderISR() { encoder.tick(); }
 
-// --- INTERRUPT SERVICE ROUTINE (ISR) ---
-// This function runs automatically whenever Pin A or B changes voltage.
-void IRAM_ATTR checkPosition() {
-  encoder.tick(); // The library calculates the state machine here
-}
+static long     lastPos   = 0;
+static bool     lastBtn   = HIGH;
+static uint32_t lastBtnMs = 0;
 
 void setupInput() {
-  // 1. Setup Rotary Pins (The library handles pinMode internally, but interrupts need this)
-  Serial.printf("[INPUT] Attaching encoder ISR: PIN_IN1=GPIO%d, PIN_IN2=GPIO%d\n", PIN_IN1, PIN_IN2);
-  attachInterrupt(digitalPinToInterrupt(PIN_IN1), checkPosition, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_IN2), checkPosition, CHANGE);
-  Serial.println("[INPUT] Encoder interrupts attached");
-
-  // 2. Setup Button Pin
-  Serial.printf("[INPUT] Setting up button: PIN_BTN=GPIO%d\n", PIN_BTN);
-  pinMode(PIN_BTN, INPUT_PULLUP); // Button connects to Ground when pressed
-  Serial.printf("[INPUT] BTN initial state: %s\n", digitalRead(PIN_BTN) == HIGH ? "HIGH (not pressed)" : "LOW (pressed/short?)");
-
-  // 3. Setup switch ADC pin (voltage divider ladder: SW_STEAM + SW_COFFEE on one pin)
-  Serial.printf("[INPUT] Setting up switch ADC: PIN_SWITCHES=GPIO%d\n", PIN_SWITCHES);
-  analogSetPinAttenuation(PIN_SWITCHES, ADC_11db); // Full 0-3.3V range
-  Serial.printf("[INPUT] Switch ADC initial read: %d\n", analogRead(PIN_SWITCHES));
-
-  Serial.println("[INPUT] Setup complete");
+    attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_ENC_B), encoderISR, CHANGE);
+    pinMode(PIN_BTN, INPUT_PULLUP);   // button to GND
+    lastPos = encoder.getPosition();
 }
 
-void syncInputState() {
-  // --- 1. HANDLE ROTATION ---
-  // The interrupts have already updated the internal position. 
-  // We just ask "Has it changed since the last time we checked?"
-  
-  static long lastPos = 0;
-  long currPos = encoder.getPosition();
-
-  if (lastPos != currPos) {
-    long delta = lastPos - currPos; // Positive: CCW (temp up), negative: CW (temp down)
-    
-    // Read current mode and sensitivity with mutex
+void syncInput() {
+    // Read current view + mode.
     STATE_LOCK();
-    DisplayMode mode = state.displayMode;
-    float sensitivity = state.tempSensitivity;
-    float setTemp = state.setTemp;
+    MachineState ms   = state.machineState;
+    DisplayView  view = state.displayView;
     STATE_UNLOCK();
-    
-    // Only adjust temperature when in SET mode
-    if (mode == MODE_SET) {
-      // Adjust set temperature using current sensitivity
-      setTemp += (delta * sensitivity);
-      
-      // Constrain temperature to reasonable range
-      if (setTemp < SETTEMP_MIN) setTemp = SETTEMP_MIN;
-      if (setTemp > SETTEMP_MAX) setTemp = SETTEMP_MAX;
-      
-      // Write back with mutex
-      STATE_LOCK();
-      state.setTemp = setTemp;
-      STATE_UNLOCK();
 
-      playEncoderTick(); // Audible feedback per step
+    // Always consume encoder + button edges so nothing jumps when we return to
+    // IDLE, but only ACT on them in IDLE.
+    long pos   = encoder.getPosition();
+    long delta = pos - lastPos;
+    lastPos = pos;
+
+    bool btn = digitalRead(PIN_BTN);
+    bool pressed = false;
+    if (btn != lastBtn && (millis() - lastBtnMs) > BTN_DEBOUNCE_MS) {
+        lastBtnMs = millis();
+        lastBtn   = btn;
+        if (btn == LOW) pressed = true;   // falling edge = press
     }
 
-    // Update the previous position so we don't print again until it moves
-    lastPos = currPos; 
-  }
+    if (ms != STATE_IDLE) return;          // menu locked outside IDLE
 
-  // --- 2. HANDLE BUTTON ---
-  // Track press time for short vs long press detection
-  static bool lastBtnState = HIGH;
-  static unsigned long btnPressTime = 0;
-  static unsigned long lastBtnTime = 0;
-  static bool longPressTriggered = false; // Track if long press action was already triggered
-  
-  bool currBtnState = digitalRead(PIN_BTN);
+    // Button: cycle the view.
+    if (pressed) {
+        DisplayView next = (DisplayView)((view + 1) % DISPLAY_VIEW_COUNT);
+        STATE_LOCK();
+        state.displayView = next;
+        STATE_UNLOCK();
+        buzzerPlay(SND_CLICK);
+        return;                            // one action per cycle
+    }
 
-  if (currBtnState != lastBtnState) {
-    // Only accept change if BTN_DEBOUNCE_MS have passed (Debounce)
-    if (millis() - lastBtnTime > BTN_DEBOUNCE_MS) {
-      
-      if (currBtnState == LOW) {
-        // Button just pressed - record the time and reset long press flag
-        btnPressTime = millis();
-        longPressTriggered = false;
-        playButtonClick(); // Immediate press feedback
-      } else {
-        // Button just released - check how long it was pressed
-        unsigned long pressDuration = millis() - btnPressTime;
-        
-        if (pressDuration < BTN_LONG_PRESS_MS && !longPressTriggered) {
-          // SHORT PRESS: Cycle display mode CURRENT → SET → DEBUG(IP) → CURRENT
-          STATE_LOCK();
-          DisplayMode mode = state.displayMode;
-          DisplayMode newMode;
-          switch (mode) {
-            case MODE_CURRENT: newMode = MODE_SET;     break;
-            case MODE_SET:     newMode = MODE_DEBUG;   break;
-            default:           newMode = MODE_CURRENT; break;
-          }
-          state.displayMode = newMode;
-          STATE_UNLOCK();
-
-          if (newMode == MODE_DEBUG) {
-            savePIDToStorage(); // Persist setpoint adjusted via encoder
-            Serial.println("→ Display Mode: IP (short press)");
-          } else if (newMode == MODE_SET) {
-            Serial.println("→ Display Mode: SET (short press)");
-          } else {
-            Serial.println("→ Display Mode: CURRENT (short press)");
-          }
+    // Encoder: edit within the current view.
+    if (delta != 0) {
+        switch (view) {
+            case VIEW_SET_COFFEE:
+                settingsAdjustCoffeeTarget((float)delta * COFFEE_TEMP_STEP);
+                buzzerPlay(SND_TICK);
+                break;
+            case VIEW_TIMER:
+                settingsAdjustShotTime((long)delta * SHOT_TIME_STEP_MS);
+                buzzerPlay(SND_TICK);
+                break;
+            case VIEW_PRESET: {
+                SETTINGS_LOCK();
+                uint8_t idx = settings.activePresetIndex;
+                SETTINGS_UNLOCK();
+                long ni = ((long)idx + delta) % NUM_PRESETS;
+                if (ni < 0) ni += NUM_PRESETS;
+                settingsSetActivePreset((uint8_t)ni);
+                buzzerPlay(SND_TICK);
+                break;
+            }
+            default: break;   // VIEW_TEMP, VIEW_IP: no edit
         }
-        // Long press action was already triggered while button was held
-      }
-      
-      lastBtnTime = millis();
-      lastBtnState = currBtnState;
     }
-  } else if (currBtnState == LOW && !longPressTriggered) {
-    // Button is still pressed - check for long press threshold
-    unsigned long pressDuration = millis() - btnPressTime;
-    if (pressDuration >= BTN_LONG_PRESS_MS) {
-      // LONG PRESS: Toggle sensitivity in SET mode between SENSITIVITY_FINE and SENSITIVITY_COARSE
-      STATE_LOCK();
-      DisplayMode currentMode = state.displayMode;
-      float newSensitivity = state.tempSensitivity;
-      if (currentMode == MODE_SET) {
-        // Use threshold instead of float equality
-        newSensitivity = (state.tempSensitivity < SENSITIVITY_THRESHOLD) ? SENSITIVITY_COARSE : SENSITIVITY_FINE;
-        state.tempSensitivity = newSensitivity;
-      }
-      STATE_UNLOCK();
-      if (currentMode == MODE_SET) {
-        Serial.printf("→ Sensitivity: %.1f°C (long press)\n", newSensitivity);
-      }
-      longPressTriggered = true; // Always set — prevents repeated firing while button is held
-      if (currentMode == MODE_SET) playLongPress(); // Only confirm when action actually happened
-    }
-  }
-
-  // --- 3. HANDLE SWITCH INPUTS (voltage divider ADC on PIN_SWITCHES) ---
-  // Active-HIGH optos: 0V = neither active, higher voltage = switch(es) active.
-  // ADC bands: NEITHER(0-1048), STEAM(1049-2599), COFFEE(2600-3417), BOTH(3418-4095)
-  int adcVal = analogRead(PIN_SWITCHES);
-  bool swSteam, swCoffee;
-
-  if (adcVal <= SWITCH_ADC_NEITHER_MAX) {
-    swSteam = false; swCoffee = false;  // Neither opto active
-  } else if (adcVal <= SWITCH_ADC_STEAM_MAX) {
-    swSteam = true;  swCoffee = false;  // Steam opto only
-  } else if (adcVal <= SWITCH_ADC_COFFEE_MAX) {
-    swSteam = false; swCoffee = true;   // Coffee opto only
-  } else {
-    swSteam = true;  swCoffee = true;   // Both optos active
-  }
-
-  float switchVoltage = adcVal * (3.3f / 4095.0f);
-
-  STATE_LOCK();
-  if (!state.switchManualOverride) {
-    state.swSteam  = swSteam;
-    state.swCoffee = swCoffee;
-  }
-  state.switchVoltage = switchVoltage;
-  STATE_UNLOCK();
 }

@@ -1,126 +1,98 @@
 #include "Buzzer.h"
+#include "Settings.h"
+#include "Config.h"
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
 
-// Runtime mute flag — default from compile-time BUZZER_MUTE, overridden by NVS at boot
-static bool _buzzerMuted = BUZZER_MUTE;
+struct Step { uint16_t freq; uint16_t durMs; };
 
-bool getBuzzerMute() { return _buzzerMuted; }
-void setBuzzerMute(bool muted) {
-    _buzzerMuted = muted;
-    if (muted) noTone(BUZZER_PIN);  // Kill any tone currently playing
+static QueueHandle_t soundQueue = NULL;
+
+// Active one-shot sequence
+static Step     seq[4];
+static uint8_t  seqLen = 0, seqIdx = 0;
+static bool     seqActive = false;
+static uint32_t stepStartMs = 0;
+
+// Error siren
+static uint32_t sirenLastMs = 0;
+static bool     sirenHi   = false;
+static bool     sirenOn   = false;
+
+static bool isMuted() {
+    SETTINGS_LOCK();
+    bool m = settings.buzzerMute;
+    SETTINGS_UNLOCK();
+    return m;
 }
 
-// =====================================================================
-// STARTUP JINGLE  (240 BPM)
-// e - d - Fsharp -- Gsharp -- csharp - B - D -- E -- B - A - Csharp -- E -- A ---
-// =====================================================================
-static const int _melody[] = {
-    NOTE_E5, NOTE_D5, NOTE_FS4, NOTE_GS4,
-    NOTE_CS5, NOTE_B4, NOTE_D4, NOTE_E4,
-    NOTE_B4, NOTE_A4, NOTE_CS4, NOTE_E4,
-    NOTE_A4
-};
-static const int _beats[] = {
-    1, 1, 2, 2,
-    1, 1, 2, 2,
-    1, 1, 2, 2,
-    3
-};
-static const int _noteCount = sizeof(_melody) / sizeof(_melody[0]);
-
-// =====================================================================
-// SETUP
-// =====================================================================
-void setupBuzzer() {
-    pinMode(BUZZER_PIN, OUTPUT);
-    digitalWrite(BUZZER_PIN, LOW);
+static void startStep(uint32_t now) {
+    if (!isMuted() && seq[seqIdx].freq > 0)
+        tone(PIN_BUZZER, seq[seqIdx].freq, seq[seqIdx].durMs);
+    stepStartMs = now;
 }
 
-// =====================================================================
-// STARTUP JINGLE  (blocking — call before tasks start)
-// =====================================================================
-void playStartupJingle() {
-    if (_buzzerMuted) return;
-    const int msPerBeat = 100;
-
-    for (int i = 0; i < _noteCount; i++) {
-        int duration = _beats[i] * msPerBeat;
-
-        if (_melody[i] == REST) {
-            noTone(BUZZER_PIN);
-        } else {
-            tone(BUZZER_PIN, _melody[i], duration);
-        }
-
-        // 10% gap between notes so repeated pitches don't blur together
-        delay((int)(duration * 1.10f));
-        noTone(BUZZER_PIN);
+static void buildSequence(Sound s) {
+    switch (s) {
+        case SND_TICK:
+            seq[0] = { TONE_TICK_HZ,  TONE_CLICK_MS }; seqLen = 1; break;
+        case SND_CLICK:
+            seq[0] = { TONE_CLICK_HZ, TONE_CLICK_MS }; seqLen = 1; break;
+        case SND_MODE_ENTER:   // ascending perfect fifth
+            seq[0] = { TONE_FIFTH_LOW_HZ,  TONE_NOTE_MS };
+            seq[1] = { TONE_FIFTH_HIGH_HZ, TONE_NOTE_MS }; seqLen = 2; break;
+        case SND_MODE_EXIT:    // descending
+            seq[0] = { TONE_FIFTH_HIGH_HZ, TONE_NOTE_MS };
+            seq[1] = { TONE_FIFTH_LOW_HZ,  TONE_NOTE_MS }; seqLen = 2; break;
+        default: seqLen = 0; break;
     }
 }
 
-// =====================================================================
-// ONE-SHOT NON-BLOCKING SOUNDS
-// =====================================================================
-
-// Short press / generic button acknowledgment
-void playButtonClick() {
-    if (_buzzerMuted) return;
-    tone(BUZZER_PIN, 1000, 50);
+void buzzerInit() {
+    soundQueue = xQueueCreate(8, sizeof(Sound));
 }
 
-// Long press — sensitivity toggle confirmed (lower, longer = "heavier" feel)
-void playLongPress() {
-    if (_buzzerMuted) return;
-    tone(BUZZER_PIN, 700, 180);
+void buzzerStartupJingle() {
+    if (isMuted()) return;
+    tone(PIN_BUZZER, TONE_FIFTH_LOW_HZ,  TONE_NOTE_MS); delay(TONE_NOTE_MS + 10);
+    tone(PIN_BUZZER, TONE_FIFTH_HIGH_HZ, TONE_NOTE_MS); delay(TONE_NOTE_MS + 10);
+    noTone(PIN_BUZZER);
 }
 
-// Encoder step while in SET mode (very short, high-pitched tick)
-void playEncoderTick() {
-    if (_buzzerMuted) return;
-    tone(BUZZER_PIN, 2000, 12);
+void buzzerPlay(Sound s) {
+    if (soundQueue) xQueueSend(soundQueue, &s, 0);   // non-blocking, drop if full
 }
 
-// Brew entry: D4 then A4 (ascending — "starting")
-void playBrewStart() {
-    if (_buzzerMuted) return;
-    tone(BUZZER_PIN, NOTE_D4, 150);
-    delay(170);
-    tone(BUZZER_PIN, NOTE_A4, 200);
-}
+void buzzerTick(bool errorSiren) {
+    uint32_t now = millis();
 
-// Brew exit: A4 then D4 (descending — "finishing")
-void playBrewEnd() {
-    if (_buzzerMuted) return;
-    tone(BUZZER_PIN, NOTE_A4, 150);
-    delay(170);
-    tone(BUZZER_PIN, NOTE_D4, 200);
-}
-
-// =====================================================================
-// SIREN  (call repeatedly from display/control loop — non-blocking)
-// =====================================================================
-void updateSiren(bool active) {
-    static bool wasActive       = false;
-    static unsigned long lastToggleMs = 0;
-    static bool sirenHigh       = false;
-
-    if (!active) {
-        if (wasActive) {
-            noTone(BUZZER_PIN);
-            wasActive = false;
+    // 1. A running one-shot sequence has priority.
+    if (seqActive) {
+        if (now - stepStartMs >= seq[seqIdx].durMs) {
+            if (++seqIdx >= seqLen) { seqActive = false; noTone(PIN_BUZZER); }
+            else startStep(now);
         }
         return;
     }
 
-    if (_buzzerMuted) {
-        wasActive = false;  // Reset so cleanup path re-arms correctly when unmuted
+    // 2. Error siren (level-driven, alternating two-tone).
+    if (errorSiren) {
+        if (now - sirenLastMs >= TONE_SIREN_MS) {
+            sirenHi = !sirenHi;
+            if (!isMuted())
+                tone(PIN_BUZZER, sirenHi ? TONE_SIREN_HI_HZ : TONE_SIREN_LO_HZ, TONE_SIREN_MS);
+            sirenLastMs = now;
+        }
+        sirenOn = true;
         return;
     }
-    wasActive = true;
-    unsigned long now = millis();
-    if (now - lastToggleMs >= 300) {
-        lastToggleMs = now;
-        sirenHigh = !sirenHigh;
-        // Alternate between a high wail and a low growl
-        tone(BUZZER_PIN, sirenHigh ? 1400 : 800);
+    if (sirenOn) { noTone(PIN_BUZZER); sirenOn = false; }
+
+    // 3. Start the next queued one-shot.
+    Sound s;
+    if (soundQueue && xQueueReceive(soundQueue, &s, 0) == pdTRUE) {
+        buildSequence(s);
+        if (seqLen > 0) { seqActive = true; seqIdx = 0; startStep(now); }
     }
 }

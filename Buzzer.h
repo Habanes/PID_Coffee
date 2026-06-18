@@ -1,47 +1,21 @@
 #ifndef BUZZER_H
 #define BUZZER_H
 
-#include <Arduino.h>
-#include "Config.h"
+// Process 11 - Buzzer. Non-blocking sound engine. Other tasks request one-shot
+// sounds via buzzerPlay() (thread-safe queue); buzzerTick() sequences them on
+// the UiTask. The ERROR siren is level-driven (passed into buzzerTick).
+// See ../Processes.txt (11).
 
-// =====================================================================
-// NOTE FREQUENCIES (Hz)
-// =====================================================================
-#define NOTE_CS4 277
-#define NOTE_D4  294
-#define NOTE_E4  330
-#define NOTE_F4  349
-#define NOTE_FS4 370
-#define NOTE_GS4 415
-#define NOTE_A4  440
-#define NOTE_B4  494
-#define NOTE_C5  523
-#define NOTE_CS5 554
-#define NOTE_D5  587
-#define NOTE_E5  659
-#define REST     0
+enum Sound {
+    SND_TICK,        // encoder step
+    SND_CLICK,       // button press
+    SND_MODE_ENTER,  // entering COFFEE/STEAM - ascending perfect fifth
+    SND_MODE_EXIT    // leaving to IDLE - descending
+};
 
-// =====================================================================
-// API
-// =====================================================================
-
-// Runtime mute control (persisted via NVS — loaded by loadPIDFromStorage)
-bool getBuzzerMute();
-void setBuzzerMute(bool muted);
-
-// Call once before RTOS tasks start (uses delay() internally — blocking)
-void setupBuzzer();
-void playStartupJingle();
-
-// Non-blocking one-shot sounds (fire-and-forget via tone() duration)
-void playButtonClick();    // Short press feedback
-void playLongPress();      // Long press sensitivity toggle confirmed
-void playEncoderTick();    // Encoder step in SET mode
-void playBrewStart();      // Brew entry: D→A ascending two-note
-void playBrewEnd();        // Brew exit:  A→D descending two-note
-
-// Non-blocking siren: call repeatedly from display/control loop
-// Pass true to activate (e.g. isEmergencyStopActive() || machState == STATE_ERROR)
-void updateSiren(bool active);
+void buzzerInit();                  // create queue (call once at boot)
+void buzzerStartupJingle();         // blocking, boot only (no tasks yet)
+void buzzerPlay(Sound s);           // enqueue a one-shot (any task)
+void buzzerTick(bool errorSiren);   // call frequently from UiTask
 
 #endif // BUZZER_H

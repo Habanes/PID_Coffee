@@ -1,65 +1,73 @@
 #ifndef STATE_H
 #define STATE_H
 
+// =====================================================================
+// Live system state - the runtime variables, each with ONE writer.
+// Guarded by stateMutex; take it for any read/write (or use stateSnapshot).
+// See ../Architecture.txt "LIVE VARIABLES".
+// =====================================================================
+
+#include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include "Config.h"
 
-enum DisplayMode {
-    MODE_CURRENT,
-    MODE_SET,
-    MODE_DEBUG
-};
+enum MachineState   { STATE_IDLE, STATE_COFFEE, STATE_STEAM, STATE_ERROR };
 
-enum MachineState {
-    STATE_IDLE,
-    STATE_COFFEE,
-    STATE_STEAM,
-    STATE_ERROR
-};
+enum CoffeeSubstate { SUB_NONE, SUB_PREINFUSE, SUB_BLOOM, SUB_PREHEAT,
+                      SUB_BREW_MAX, SUB_BREW_PID, SUB_DONE };
 
-enum CoffeeSubstate {
-    SUBSTATE_NONE,
-    COFFEE_PREINFUSE,
-    COFFEE_BLOOM,
-    COFFEE_PREHEAT,
-    COFFEE_BREW_MAX,
-    COFFEE_BREW_PID,
-    COFFEE_DONE
-};
+enum HeaterMode     { HEATER_OFF, HEATER_FULL_ON, HEATER_PID };
+
+enum DisplayView    { VIEW_TEMP, VIEW_SET_COFFEE, VIEW_TIMER,
+                      VIEW_PRESET, VIEW_IP };
+#define DISPLAY_VIEW_COUNT 5
+
+enum ErrorReason    { ERR_NONE, ERR_BOTH_SWITCHES, ERR_OVER_TEMP,
+                      ERR_OVER_PRESSURE, ERR_TEMP_SENSOR };
 
 struct SystemState {
-    float currentTemp = 88.88;          // Sentinel: all segments lit until first valid read
-    float setTemp = DEFAULT_TARGET_TEMP; // Overwritten by loadPIDFromStorage() on boot
-    float pidOutput = 0.0;
-    DisplayMode displayMode = MODE_CURRENT;
-    float tempSensitivity = SENSITIVITY_FINE;
-    int consecutiveSensorFailures = 0;
-    bool sensorError = false;
-    // State machine
-    MachineState machineState = STATE_IDLE;
-    CoffeeSubstate coffeeSubstate = SUBSTATE_NONE;
-    float currentPressure = 0.0f;
-    bool swSteam = false;
-    bool swCoffee = false;
-    char errorReason[64] = "";   // Human-readable reason for the current ERROR state
-    // Diagnostics — raw sensor voltages and output states
-    float switchVoltage = 0.0f;     // Voltage at PIN_SWITCHES after resistor ladder (V)
-    float pressureVoltage = 0.0f;   // Voltage at PIN_PRESSURE GPIO (V, before divider reversal)
-    bool pumpOn = false;
-    bool valveOn = false;
-    // Temporary: allow web GUI to drive swSteam/swCoffee while optos are not installed
-    bool switchManualOverride = false;
+    // --- Sensors (writer: temperature / pressure processes) ---
+    float currentTemperature;       // true temp (offset already subtracted)
+    float currentPressure;          // Bar
+    float switchVoltage;            // diagnostic
+    float pressureVoltage;          // diagnostic
+    bool  temperatureSensorError;
+
+    // --- Switches (writer: switch state machine) ---
+    bool  switchSteam;
+    bool  switchCoffee;
+
+    // --- Control (writer: brew SM, except heatingPidOutput = PID) ---
+    float       currentTargetTemperature;
+    double      heatingPidOutput;
+    HeaterMode  heaterMode;
+
+    // --- Machine (writer: brew SM) ---
+    MachineState   machineState;
+    CoffeeSubstate coffeeSubstate;
+    bool           pumpState;
+    bool           valveState;
+    uint32_t       brewTimerElapsedMs;
+    ErrorReason    errorReason;
+
+    // --- UI (writer: input process) ---
+    DisplayView    displayView;
 };
 
-extern SystemState state; // Tell the world this variable exists
-extern SemaphoreHandle_t stateMutex; // Mutex for thread-safe state access
+extern SystemState state;
+extern SemaphoreHandle_t stateMutex;
 
-// Mutex helper macros for clean code
+void initState();   // create the mutex + seed defaults (call once, first)
+
 #define STATE_LOCK()   xSemaphoreTake(stateMutex, portMAX_DELAY)
 #define STATE_UNLOCK() xSemaphoreGive(stateMutex)
 
-// Initialize the state mutex (call once in setup before tasks start)
-void initStateMutex();
+// Consistent copy of the whole struct under lock (for readers).
+SystemState stateSnapshot();
 
-#endif
+// Human-readable text (for display / web).
+const char* machineStateText(MachineState s);
+const char* coffeeSubstateText(CoffeeSubstate s);
+const char* errorReasonText(ErrorReason r);
+
+#endif // STATE_H

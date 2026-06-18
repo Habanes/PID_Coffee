@@ -1,9 +1,12 @@
 #ifndef INPUT_H
 #define INPUT_H
-#include <Arduino.h>
-#include "Config.h"
 
-void setupInput();
-void syncInputState(); // Called from TaskControl (Core 1) every 100ms
+// Process 7 - Input (IDLE-only menu). Encoder ISR + button. The button cycles
+// the 5 display views; the encoder edits the active preset's coffee target /
+// shot time / preset selection. Locked unless machineState == IDLE.
+// See ../Processes.txt (7).
 
-#endif
+void setupInput();   // attach encoder ISR + button (call once in UiTask init)
+void syncInput();    // call every UiTask cycle
+
+#endif // INPUT_H

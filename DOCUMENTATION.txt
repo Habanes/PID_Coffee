@@ -1,0 +1,317 @@
+================================================================================
+ CoffeePID - QuickMill Orione 3000  |  MASTER DOCUMENTATION
+================================================================================
+ Single source of truth for the NewVersion firmware: hardware I/O, data model,
+ processes, state machines, concurrency, UI, web, build. ESP32-S3, Arduino core.
+
+ (Companion planning docs: Hardware IO.txt, Architecture.txt, Processes.txt,
+  FreeRTOS Management.txt, WebUI Style.txt, List of Features to Build.txt.
+  This file supersedes them as the consolidated reference.)
+
+
+================================================================================
+1. WHAT IT DOES
+================================================================================
+PID-controls the thermoblock of an espresso machine and sequences a full brew.
+Three operating modes plus error handling:
+  IDLE   - heat to the coffee target temperature and hold (heating PID)
+  COFFEE - run the brew sequence (pre-infuse -> bloom -> preheat -> boost -> PID
+           extraction -> done) with a settable total shot time
+  STEAM  - drive the block to a steam target temperature (bang-bang)
+  ERROR  - safe state (heater off, pump off, valve vents) on any fault
+3 user presets, a 4-digit 7-seg display + rotary menu, and a web GUI.
+
+
+================================================================================
+2. HARDWARE I/O
+================================================================================
+INPUTS
+  Signal              Pin      Type            How it is read
+  ------------------  -------  --------------  --------------------------------
+  Temperature (TSIC)  GPIO 21  digital ZACWire TSIC library getTemperature()
+  Pressure            GPIO 1   analog (ADC)    avg 4 samples, reverse divider
+  Switches (combined) GPIO 2   analog ladder   1 ADC -> 4 bands via 3 thresholds
+  Rotary encoder A/B  GPIO 6/5 digital, ISR    RotaryEncoder lib, pin-change ISR
+  Push button         GPIO 4   digital pullup   debounced poll (active LOW)
+
+OUTPUTS
+  Signal     Pin              Polarity     Driver
+  ---------  ---------------  -----------  -----------------------------------
+  Heater SSR GPIO 14          active HIGH  100 Hz hardware-timer ISR (time-prop)
+  Pump       GPIO 38          active LOW   digitalWrite from brew SM
+  Valve      GPIO 48          active LOW   digitalWrite from brew SM
+  Buzzer     GPIO 47          tone()       non-blocking sound engine
+  7-seg      digits 3/11/12/8 common anode SevSeg multiplex (UiTask)
+             segs 9/13/17/15/7/10/18/16
+
+Pressure transducer: 0.5 V = 0 Bar, 4.5 V = full scale, via divider R1=2.2k
+R2=5.1k (ratio 0.6986). Temp sensor TSIC 306 reads up to ~150 C (this caps the
+steam range - see section 7).
+
+
+================================================================================
+3. SYSTEM ARCHITECTURE  (cores, tasks, interrupts)
+================================================================================
+ESP32-S3, dual core. Core 1 = real-time control only; Core 0 = UI + network.
+
+  Task         Core Prio Rate    Does
+  -----------  ---- ---- ------  --------------------------------------------
+  ControlTask    1    3  100 ms  switch -> temp -> pressure -> brew SM -> PID
+                                 -> publish to heater ISR (the whole control)
+  UiTask         0    2    2 ms  7-seg refresh + input/menu + buzzer tick
+  WebTask        0    1   10 ms  HTTP server (handleClient)
+
+  ISR                Trigger             Does
+  -----------------  ------------------  ---------------------------------------
+  Heater timer       100 Hz hw timer     time-proportional SSR + hard cutoff
+  Encoder            GPIO 6/5 change      counts rotary detents
+
+Boot (CoffeePID.ino setup): initState -> initSettings (load NVS) -> buzzerInit
+-> startup jingle -> STARTUP_DELAY_MS -> start the 3 tasks. loop() self-deletes.
+
+
+================================================================================
+4. DATA MODEL
+================================================================================
+4.1 LIVE STATE  (struct SystemState, guarded by stateMutex; ONE writer each)
+  Variable                  Writer        Read by
+  ------------------------  ------------  -----------------------------------
+  currentTemperature        Temperature   PID, brew SM, heater, display, web
+  temperatureSensorError    Temperature   brew SM, web
+  currentPressure           Pressure      brew SM, web
+  pressureVoltage           Pressure      web (diagnostic)
+  switchVoltage             Switches      web (diagnostic)
+  switchSteam / switchCoffee Switches     brew SM, web
+  currentTargetTemperature  brew SM       PID, display, web
+  heaterMode (OFF/FULL/PID) brew SM       PID (gain pick), heater publish, web
+  machineState              brew SM       everyone
+  coffeeSubstate            brew SM       display, web
+  pumpState / valveState    brew SM       (drive GPIO), web
+  brewTimerElapsedMs        brew SM       display, web
+  errorReason               brew SM       display, web
+  heatingPidOutput          PID           heater publish, web
+  displayView               Input         display
+
+  Access: take stateMutex (STATE_LOCK/UNLOCK) for any read/write, or use
+  stateSnapshot() for a consistent copy. The heater ISR does NOT lock - it reads
+  volatiles published once per cycle by heaterUpdate().
+
+4.2 SETTINGS  (struct Settings, guarded by settingsMutex, persisted to NVS
+    namespace "coffee-pid"; written ONLY via the config layer, IDLE-only)
+  GLOBAL (not changed by presets):
+    heatingKp/Ki/Kd, brewKp/Ki/Kd      PID gains
+    tempOffset                         sensor calibration (subtracted at source)
+    buzzerMute                         silence the buzzer
+    coffeeTempMax                      over-temp ERROR limit while in COFFEE
+    steamTempMax                       over-temp ERROR limit in IDLE/STEAM + ISR
+    safePressureMax                    over-pressure ERROR limit (all modes)
+    activePresetIndex                  which preset is live (0..2)
+  PER-PRESET (Preset[3]; brew process only):
+    coffeeTargetTemp                   coffee setpoint
+    steamTargetTemp                    steam bang-bang target
+    preinfuseMaxMs, bloomMs, preheatMs, brewMaxMs   substate durations
+    shotMs                             TOTAL brew time (ends the shot)
+    preinfuseTargetBar                 pressure that ends pre-infusion early
+
+  Validation: every write path runs sanitizeLocked() which clamps each field to
+  its *_MIN/_MAX range AND enforces coherence:
+    coffeeTargetTemp <= coffeeTempMax - 10 ;  steamTargetTemp <= steamTempMax-10
+    shotMs >= brewMaxMs
+
+4.3 KEY CONSTANTS / DEFAULTS  (Config.h)
+  tempOffset        5    (0-10)      coffeeTargetTemp  93   (80-100)
+  steamTargetTemp   130  (115-135)   coffeeTempMax     110
+  steamTempMax      145  (130-149)   safePressureMax   14   (1-16)
+  BREW_READY_TEMP   98               STEAM_HYSTERESIS  5
+  ERROR_CLEAR_HYSTERESIS 5           OVERTEMP_TRIP_MS  300
+  OVERPRESSURE_TRIP_MS  100          SWITCH_DEBOUNCE_MS 600
+  SWITCH_LEVEL_1/2/3 0.43/1.23/2.45 V (ADC 534/1526/3040)
+  SSR_WINDOW_MS 1000   HEATER_TIMER_INTERVAL_MS 10   PID_IMAX 55  PID_EMA 0.6
+  TEMP_ERROR_INTERVAL_MS 1000  EMA_ALPHA 0.6  COFFEE_TEMP_STEP 0.5  SHOT_TIME_STEP_MS 1000
+
+
+================================================================================
+5. PROCESSES  (each: reads -> writes)
+================================================================================
+Control loop (Core 1, every 100 ms, IN THIS ORDER so the PID sees a fresh target):
+
+ (1) Switch       reads GPIO 2 + thresholds      -> switchVoltage/Steam/Coffee
+                  classify into 4 bands, commit only after SWITCH_DEBOUNCE_MS
+                  stable (rejects the steam-mode coffee-opto pulse)
+ (2) Temperature  reads TSIC + tempOffset         -> currentTemperature (=EMA-offset),
+                  validate range, EMA filter, fault if bad > interval   temperatureSensorError
+ (3) Pressure     reads ADC + calibration         -> currentPressure, pressureVoltage
+ (4) Brew SM      reads switches, temp, pressure,  -> machineState, coffeeSubstate,
+                  fault, limits, active preset        currentTargetTemperature, heaterMode,
+                                                      pumpState, valveState (+GPIO),
+                                                      brewTimerElapsedMs, errorReason
+ (5) PID          reads target, temp, gains,       -> heatingPidOutput
+                  heaterMode (computes only in PID mode; resets integral on entry)
+ then ControlTask publishes (heaterMode, duty, temp, steamTempMax) to the heater.
+
+Independent:
+ (6) Heater ISR   reads heaterMode, duty, temp, cutoff -> SSR GPIO (time-prop;
+                  forced off if temp > steamTempMax)
+ (7) Input        reads encoder/button (IDLE only)  -> displayView + preset edits
+ (8) Display      reads state + active preset       -> 7-seg
+ (9) Web          reads everything; writes settings (IDLE only) -> HTTP/API
+ (10) Settings/NVS load on boot, persist on change (web/menu)
+ (11) Buzzer      reads buzzerMute; sound queue       -> buzzer GPIO (non-blocking)
+
+
+================================================================================
+6. STATE MACHINES
+================================================================================
+6.1 SWITCH DECODE (process 1)
+  Pin voltage  ADC band      -> (switchSteam, switchCoffee)
+  ~0 V         <= L1 (534)      BOTH    (1,1)
+  ~0.85 V      <= L2 (1526)     STEAM   (1,0)
+  ~1.6 V       <= L3 (3040)     COFFEE  (0,1)
+  ~3.3 V       >  L3            NEITHER (0,0)
+  A band must be stable for SWITCH_DEBOUNCE_MS (600 ms) before it is committed.
+
+6.2 MAIN MACHINE (process 4)
+  Transitions (after safety checks, see section 7):
+    IDLE  + steam            -> STEAM
+    IDLE  + coffee & temp<=BREW_READY_TEMP -> COFFEE (else stay, cooling)
+    STEAM + !steam           -> IDLE
+    COFFEE+ !steam&!coffee   -> IDLE ;  COFFEE + steam -> STEAM
+    (both switches anywhere) -> ERROR
+    ERROR -> IDLE only when both switches off AND fault cleared (+hysteresis)
+
+  Outputs per state/substate  (heater / pump / valve ; valve true=closed/holds):
+    IDLE              PID       off  off
+    STEAM             bang-bang on   closed   (FULL_ON below steamTarget-HYST, else OFF)
+    ERROR             OFF       off  open(vent)
+    COFFEE PREINFUSE  PID       on   closed
+    COFFEE BLOOM      PID       off  closed
+    COFFEE PREHEAT    FULL_ON   off  closed
+    COFFEE BREW_MAX   FULL_ON   on   closed
+    COFFEE BREW_PID   PID       on   closed
+    COFFEE DONE       PID       off  open
+
+6.3 BREW SEQUENCE + SHOT TIMER
+  On COFFEE entry brewTimerElapsedMs starts at 0 and counts continuously (the
+  standard "total shot time"). Substates advance on their own durations:
+    PREINFUSE -> BLOOM  when pressure >= preinfuseTargetBar OR preinfuseMaxMs
+    BLOOM     -> PREHEAT  after bloomMs
+    PREHEAT   -> BREW_MAX after preheatMs
+    BREW_MAX  -> BREW_PID after brewMaxMs (only if before shotMs)
+    any       -> DONE     as soon as brewTimerElapsed >= shotMs  (safe truncation)
+  DONE holds (pump off) until the coffee switch is released -> IDLE.
+
+
+================================================================================
+7. SAFETY MODEL
+================================================================================
+Temperature is calibrated at the source: currentTemperature = EMA(raw) -
+tempOffset, so the PID, the limits and the display all use the TRUE temperature
+(no offset math anywhere else). Offset applies in all modes (sensor property).
+
+Mode-aware over-temp ERROR limit:
+  COFFEE        -> coffeeTempMax (~110)
+  IDLE / STEAM  -> steamTempMax  (~145)   (IDLE uses the high limit so the
+                                           post-steam cooldown does not trip)
+  ISR hard cutoff = steamTempMax (independent backstop if the loop misbehaves)
+Over-pressure ERROR: currentPressure > safePressureMax (all modes).
+Brew-readiness gate: COFFEE can only START when currentTemperature <= BREW_READY_TEMP.
+
+Spike debounce: over-temp must persist OVERTEMP_TRIP_MS (300 ms) and over-pressure
+OVERPRESSURE_TRIP_MS (100 ms) before tripping ERROR, so noise/overshoot is ignored.
+Temp sensor fault (no valid reading > TEMP_ERROR_INTERVAL_MS) and both-switches
+trip immediately (already debounced upstream).
+
+ERROR clears to IDLE only when BOTH switches are released AND the fault is gone
+(temp < limit - ERROR_CLEAR_HYSTERESIS, pressure ok, sensor ok).
+
+NOTE: TSIC 306 saturates ~150 C, so all steam limits are kept below 150; the
+bang-bang cutoff, the over-temp trip and the ISR cutoff all stay readable.
+
+PID anti-windup: integral accumulates only in HEATER_PID mode and is reset on
+entry to PID mode (covers steam->idle and brew_max->brew_pid). Steam never uses
+the PID (bang-bang FULL_ON/OFF), so its output is simply ignored there.
+
+
+================================================================================
+8. USER INTERFACE
+================================================================================
+8.1 7-SEG + ROTARY (IDLE only; locked while COFFEE/STEAM/ERROR)
+  Button cycles 5 views; encoder acts within the editable ones:
+    TEMP        show currentTemperature      (encoder idle)
+    SET_COFFEE  edit active coffeeTargetTemp  (+/- COFFEE_TEMP_STEP)
+    TIMER       edit active shotMs            (+/- SHOT_TIME_STEP_MS, shown in s)
+    PRESET      select activePresetIndex 1..3
+    IP          scroll the web IP             (encoder idle)
+  While not IDLE the display auto-shows: COFFEE -> elapsed shot seconds,
+  STEAM -> temperature, ERROR -> blinking "Err".
+
+8.2 BUZZER (non-blocking, mute-able)
+    encoder step      short tick
+    button press      short click
+    enter COFFEE/STEAM ascending perfect fifth (A4 -> E5)
+    exit to IDLE      descending (E5 -> A4)
+    ERROR             repeating beep-boop siren (while in ERROR)
+    boot              startup jingle
+
+8.3 WEB GUI (style from NewWebsiteIdea/, dark espresso theme)
+  Served from PROGMEM: /, /style.css, /script.js.
+  API:  GET /api/state     live values (1 s poll)
+        GET /api/settings  all settings + active preset
+        POST /api/settings  apply globals + active preset (IDLE only, else 409)
+        POST /api/preset    select active preset (IDLE only)
+        POST /api/reset     restore defaults (IDLE only)
+  The page is read-only (banner + disabled controls) whenever the machine is not
+  IDLE; the server also rejects writes outside IDLE. No steam-PID row and no
+  switch override (per design). WiFi: station, falls back to AP "QuickMill-PID".
+
+
+================================================================================
+9. CONCURRENCY
+================================================================================
+  stateMutex     guards SystemState   (STATE_LOCK / STATE_UNLOCK)
+  settingsMutex  guards Settings + NVS (SETTINGS_LOCK / SETTINGS_UNLOCK)
+  soundQueue     FreeRTOS queue, ControlTask/Input -> Buzzer (cross-core safe)
+  Rules that keep it safe:
+   - Both mutexes created in setup() before any task starts.
+   - No code ever holds both mutexes at once (no nesting) -> no deadlock.
+   - Readers prefer snapshots (stateSnapshot/settingsSnapshot/activePreset).
+   - ISRs take NO locks: heater reads volatiles published each cycle; encoder
+     only counts.
+   - All task loops are non-blocking (vTaskDelayUntil / vTaskDelay); the only
+     delay() is the boot jingle, before tasks start. tone() and the brew sounds
+     are non-blocking.
+   - Settings writes hold settingsMutex during the NVS write (tens of ms) but
+     only happen in IDLE, so at worst one control cycle is delayed.
+
+
+================================================================================
+10. FILE MAP
+================================================================================
+  CoffeePID.ino        boot + task creation
+  Config.h             pins, constants, defaults, ranges, tones
+  State.h/.cpp         SystemState, enums, stateMutex, snapshot, text helpers
+  Settings.h/.cpp      Settings + 3 presets, NVS load/save, validation, edits
+  Switches.*           process 1   Temperature.*  process 2   Pressure.* process 3
+  BrewStateMachine.*   process 4   Pid.*          process 5   Heater.*   process 6
+  Input.*              process 7   Display.*      process 8   Web.*      process 9
+  Buzzer.*             process 11  (Settings = process 10)
+  ControlTask.*        Core 1 loop   UiTask.*  Core 0 UI loop  (Web has its own task)
+  REVIEW.txt           verification sweep + feature coverage
+
+
+================================================================================
+11. BUILD
+================================================================================
+  Board:   ESP32-S3 (Arduino core 3.x)
+  Sketch:  open NewVersion/CoffeePID.ino
+  Libraries to install:
+    TSIC, PID_v1 (RANCILIO fork - needs SetIntegratorLimits/SetSmoothingFactor),
+    SevSeg, RotaryEncoder.  (WiFi, WebServer, Preferences ship with the core.)
+  Before flashing: set real WIFI_SSID / WIFI_PASSWORD in Config.h section 10.
+  NOT yet compiled on a toolchain - expect minor first-build fixups.
+
+  Bench-tuning after first flash:
+    - coffeeTempMax (110): raise if the PREHEAT/BREW_MAX bursts trip it.
+    - SWITCH_LEVEL_1/2/3 ADC thresholds: verify against the real divider.
+    - COFFEE_TEMP_STEP / encoder detents: confirm one comfortable step.
+================================================================================
