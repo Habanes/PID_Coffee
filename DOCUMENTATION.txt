@@ -300,18 +300,72 @@ the PID (bang-bang FULL_ON/OFF), so its output is simply ignored there.
 
 
 ================================================================================
-11. BUILD
+11. BUILD - ARDUINO IDE SETUP  (hardware: ESP32-S3 N16R8 = 16MB flash, 8MB OPI PSRAM)
 ================================================================================
-  Board:   ESP32-S3 (Arduino core 3.x)
-  Sketch:  open NewVersion/CoffeePID.ino
-  Libraries to install:
-    TSIC, PID_v1 (RANCILIO fork - needs SetIntegratorLimits/SetSmoothingFactor),
-    SevSeg, RotaryEncoder.  (WiFi, WebServer, Preferences ship with the core.)
-  Before flashing: set real WIFI_SSID / WIFI_PASSWORD in Config.h section 10.
-  NOT yet compiled on a toolchain - expect minor first-build fixups.
 
-  Bench-tuning after first flash:
-    - coffeeTempMax (110): raise if the PREHEAT/BREW_MAX bursts trip it.
-    - SWITCH_LEVEL_1/2/3 ADC thresholds: verify against the real divider.
-    - COFFEE_TEMP_STEP / encoder detents: confirm one comfortable step.
+11.1 ESP32 BOARD SUPPORT (one-time)
+  File -> Preferences -> Additional Boards Manager URLs, add:
+    https://espressif.github.io/arduino-esp32/package_esp32_index.json
+  Tools -> Board -> Boards Manager -> install "esp32" by Espressif Systems,
+  version 3.x  (REQUIRED - the code uses the core-3.x timer API
+  timerBegin(freq)/timerAlarm; it will NOT build on core 2.x).
+  Tools -> Board -> esp32 -> "ESP32S3 Dev Module".
+
+11.2 TOOLS MENU SETTINGS (for the N16R8 module)
+  Board ................................ ESP32S3 Dev Module
+  Port ................................. (your COM port, e.g. COM5)
+  USB CDC On Boot ...................... Enabled  if Serial is on the NATIVE USB
+                                         port; Disabled if on the UART bridge
+  CPU Frequency ........................ 240MHz (WiFi)
+  Core Debug Level ..................... None     (Info/Error only when debugging)
+  USB DFU On Boot ...................... Disabled
+  Erase All Flash Before Upload ........ Disabled (set Enabled ONCE for a clean
+                                         first flash to wipe old NVS, then revert)
+  Events Run On ........................ Core 0   <-- IMPORTANT: keeps Core 1 free
+                                         for the real-time ControlTask
+  Flash Mode ........................... QIO 80MHz
+  Flash Size ........................... 16MB (128Mb)        (N16)
+  JTAG Adapter ......................... Disabled
+  Arduino Runs On ...................... Core 1   (loop task self-deletes; fine)
+  USB Firmware MSC On Boot ............. Disabled
+  Partition Scheme ..................... 16M Flash (3MB APP/9.9MB FATFS)
+                                         (any scheme with an NVS partition works)
+  PSRAM ................................ OPI PSRAM           (R8 = octal PSRAM)
+  Upload Mode .......................... UART0 / Hardware CDC
+  Upload Speed ......................... 921600  (drop to 460800 if uploads fail)
+  USB Mode ............................. Hardware CDC and JTAG
+  Zigbee Mode .......................... Disabled
+
+11.3 LIBRARIES
+  From Library Manager (Tools -> Manage Libraries -> search & Install):
+    SevSeg          (Dean Reading)      - 7-segment display
+    RotaryEncoder   (Matthias Hertel)   - rotary encoder
+    TSIC                                - TSIC temperature sensor
+                    (if not in Library Manager, install the ZIP from
+                     https://github.com/Schm1tz1/arduino-tsic )
+
+  MANUAL install - the rancilio/CleverCoffee PID fork (NOT the stock PID lib):
+    The code needs SetIntegratorLimits() and SetSmoothingFactor(), which the
+    standard "PID by Brett Beauregard" does NOT have. Use the fork:
+      Repo:  https://github.com/rancilio-pid/Arduino-PID-Library
+      ZIP:   https://github.com/rancilio-pid/Arduino-PID-Library/archive/refs/heads/master.zip
+    Install: Sketch -> Include Library -> Add .ZIP Library... -> select the ZIP.
+    CONFLICT: do NOT also have the stock "PID" library installed - both define
+    PID_v1.h and the IDE may pick the wrong one ("no member named
+    SetIntegratorLimits"). Remove the stock PID if present.
+
+  Bundled with the ESP32 core (no install): WiFi, WebServer, Preferences, FreeRTOS.
+
+  Harmless build message: "Multiple libraries were found for WiFi.h ... Not used:
+  WiFiNINA". The IDE correctly uses the ESP32 core WiFi. To silence it, delete the
+  WiFiNINA folder from your Arduino/libraries.
+
+11.4 FLASH
+  Open the sketch (CoffeePID.ino - all .cpp/.h in the same folder compile together).
+  Set real WIFI_SSID / WIFI_PASSWORD in Config.h section 10 before flashing.
+
+11.5 BENCH-TUNING AFTER FIRST FLASH
+  - coffeeTempMax (110): raise if the PREHEAT/BREW_MAX bursts trip it.
+  - SWITCH_LEVEL_1/2/3 ADC thresholds: verify against the real divider.
+  - COFFEE_TEMP_STEP / encoder detents: confirm one comfortable step.
 ================================================================================

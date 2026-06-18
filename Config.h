@@ -40,6 +40,12 @@
 #define PIN_DISP_SEG_G      18
 #define PIN_DISP_SEG_DP     16
 
+// 7-segment display behaviour
+#define DISPLAY_BRIGHTNESS      90      // 0-100
+#define DISPLAY_UPDATE_MS       100     // content refresh interval (ms)
+#define DISPLAY_BLINK_CYCLE_MS  500     // ERROR "Err" blink period (ms)
+#define DISPLAY_IP_SCROLL_MS    500     // IP view scroll step (ms)
+
 
 // =====================================================================
 // 2. RTOS TASKS                          (see ../FreeRTOS Management.txt)
@@ -173,8 +179,8 @@
 // NOTE: fill in real credentials locally - do NOT commit secrets.
 // =====================================================================
 
-#define WIFI_SSID               "YOUR_WIFI_SSID"
-#define WIFI_PASSWORD           "YOUR_WIFI_PASSWORD"
+#define WIFI_SSID               "BabaLan"
+#define WIFI_PASSWORD           "bittegibmirinternet"
 #define AP_SSID                 "QuickMill-PID"
 #define AP_PASSWORD             "changeme123"
 
