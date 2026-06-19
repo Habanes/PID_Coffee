@@ -5,12 +5,16 @@
 #include "Buzzer.h"
 #include <RotaryEncoder.h>
 
-static RotaryEncoder encoder(PIN_ENC_A, PIN_ENC_B, RotaryEncoder::LatchMode::TWO03);
+// A/B intentionally swapped (PIN_ENC_B first) to flip CW/CCW direction.
+static RotaryEncoder encoder(PIN_ENC_B, PIN_ENC_A, RotaryEncoder::LatchMode::TWO03);
 static void IRAM_ATTR encoderISR() { encoder.tick(); }
 
 static long     lastPos   = 0;
 static bool     lastBtn   = HIGH;
 static uint32_t lastBtnMs = 0;
+static bool     btnDown     = false;   // currently held (debounced)
+static uint32_t btnDownMs   = 0;       // when the press started
+static bool     longHandled = false;   // long action already fired this hold
 
 void setupInput() {
     attachInterrupt(digitalPinToInterrupt(PIN_ENC_A), encoderISR, CHANGE);
@@ -32,18 +36,43 @@ void syncInput() {
     long delta = pos - lastPos;
     lastPos = pos;
 
-    bool btn = digitalRead(PIN_BTN);
-    bool pressed = false;
-    if (btn != lastBtn && (millis() - lastBtnMs) > BTN_DEBOUNCE_MS) {
-        lastBtnMs = millis();
+    uint32_t now = millis();
+
+    // Debounced button edges. Short press acts on RELEASE (so a hold that crosses
+    // the long-press threshold does not also cycle the view); long press fires
+    // while still held.
+    bool shortPress = false, longPress = false;
+    bool btn = digitalRead(PIN_BTN);           // LOW = pressed
+    if (btn != lastBtn && (now - lastBtnMs) > BTN_DEBOUNCE_MS) {
+        lastBtnMs = now;
         lastBtn   = btn;
-        if (btn == LOW) pressed = true;   // falling edge = press
+        if (btn == LOW) {                      // falling edge = press
+            btnDown = true; btnDownMs = now; longHandled = false;
+        } else {                               // rising edge = release
+            if (btnDown && !longHandled) shortPress = true;
+            btnDown = false;
+        }
+    }
+    if (btnDown && !longHandled && (now - btnDownMs) >= BTN_LONG_PRESS_MS) {
+        longHandled = true;
+        longPress   = true;
     }
 
-    if (ms != STATE_IDLE) return;          // menu locked outside IDLE
+    if (ms != STATE_IDLE) return;          // menu locked outside IDLE (edges consumed)
 
-    // Button: cycle the view.
-    if (pressed) {
+    // Long press in SET view: toggle the edit granularity (whole degrees <-> tenths).
+    if (longPress) {
+        if (view == VIEW_SET_COFFEE) {
+            STATE_LOCK();
+            state.setEditDecimals = !state.setEditDecimals;
+            STATE_UNLOCK();
+            buzzerPlay(SND_CLICK);
+        }
+        return;
+    }
+
+    // Short press: cycle the view.
+    if (shortPress) {
         DisplayView next = (DisplayView)((view + 1) % DISPLAY_VIEW_COUNT);
         STATE_LOCK();
         state.displayView = next;
@@ -55,10 +84,15 @@ void syncInput() {
     // Encoder: edit within the current view.
     if (delta != 0) {
         switch (view) {
-            case VIEW_SET_COFFEE:
-                settingsAdjustCoffeeTarget((float)delta * COFFEE_TEMP_STEP);
+            case VIEW_SET_COFFEE: {
+                STATE_LOCK();
+                bool dec = state.setEditDecimals;
+                STATE_UNLOCK();
+                float step = dec ? COFFEE_TEMP_STEP_FINE : COFFEE_TEMP_STEP_WHOLE;
+                settingsAdjustCoffeeTarget((float)delta * step);
                 buzzerPlay(SND_TICK);
                 break;
+            }
             case VIEW_TIMER:
                 settingsAdjustShotTime((long)delta * SHOT_TIME_STEP_MS);
                 buzzerPlay(SND_TICK);

@@ -16,9 +16,11 @@ static const byte CHAR_BLANK = 0x00;
 static const byte CHAR_C = 0b00111001;
 static const byte CHAR_E = 0b01111001;
 static const byte CHAR_P = 0b01110011;
+static const byte CHAR_S = 0b01101101;   // identical glyph to '5' on 7-seg
 static const byte CHAR_t = 0b01111000;
 static const byte CHAR_r = 0b01010000;
 static const byte CHAR_DASH = 0b01000000;
+static const byte SEG_DP = 0b10000000;
 
 void setupDisplay() {
     byte digitPins[]   = { PIN_DISP_DIGIT1, PIN_DISP_DIGIT2, PIN_DISP_DIGIT3, PIN_DISP_DIGIT4 };
@@ -57,6 +59,39 @@ static void renderSeconds(uint32_t sec, byte lead) {
     s[1] = (sec >= 100) ? digitSeg[(sec / 100) % 10] : CHAR_BLANK;
     s[2] = (sec >= 10)  ? digitSeg[(sec / 10) % 10]  : CHAR_BLANK;
     s[3] = digitSeg[sec % 10];
+    sevseg.setSegments(s);
+}
+
+// SET_COFFEE: "S" + target, with the digit group being edited blinking.
+// editDecimals = true  -> the tenths digit blinks
+// editDecimals = false -> the whole-degree digits blink
+static void renderSetCoffee(float temp, bool editDecimals) {
+    static uint32_t last = 0; static bool on = true;
+    if (millis() - last >= DISPLAY_BLINK_CYCLE_MS) { on = !on; last = millis(); }
+
+    byte s[4];
+    s[0] = CHAR_S;
+    if (temp >= 100.0f) {
+        int t = (int)temp;
+        s[1] = digitSeg[(t / 100) % 10];
+        s[2] = digitSeg[(t / 10) % 10];
+        s[3] = digitSeg[t % 10];
+        if (!on && !editDecimals) { s[1] = s[2] = s[3] = CHAR_BLANK; }   // no tenths at >=100
+    } else {
+        int t = (int)(temp * 10.0f);
+        if (t < 0) t = 0;
+        s[1] = digitSeg[(t / 100) % 10];
+        s[2] = digitSeg[(t / 10) % 10] | SEG_DP;   // decimal point on ones digit
+        s[3] = digitSeg[t % 10];
+        if (!on) {
+            if (editDecimals) {
+                s[3] = CHAR_BLANK;          // blink the tenths
+            } else {
+                s[1] = CHAR_BLANK;          // blink the whole degrees (keep the dot)
+                s[2] = SEG_DP;
+            }
+        }
+    }
     sevseg.setSegments(s);
 }
 
@@ -121,9 +156,9 @@ void refreshDisplay() {
     Settings cfg = settingsSnapshot();
     const Preset& p = cfg.preset[cfg.activePresetIndex];
     switch (s.displayView) {
-        case VIEW_TEMP:       renderTemp(s.currentTemperature, CHAR_BLANK); break;
-        case VIEW_SET_COFFEE: renderTemp(p.coffeeTargetTemp, CHAR_C);       break;
-        case VIEW_TIMER:      renderSeconds(p.shotMs / 1000, CHAR_t);       break;
+        case VIEW_TEMP:       renderTemp(s.currentTemperature, CHAR_C);          break;
+        case VIEW_SET_COFFEE: renderSetCoffee(p.coffeeTargetTemp, s.setEditDecimals); break;
+        case VIEW_TIMER:      renderSeconds(p.shotMs / 1000, CHAR_t);            break;
         case VIEW_PRESET:     renderPreset(cfg.activePresetIndex);          break;
         case VIEW_IP:         renderIpScroll();                            break;
     }

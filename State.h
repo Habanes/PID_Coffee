@@ -52,6 +52,7 @@ struct SystemState {
 
     // --- UI (writer: input process) ---
     DisplayView    displayView;
+    bool           setEditDecimals;   // SET_COFFEE: edit tenths (true) vs whole degrees (false)
 };
 
 extern SystemState state;

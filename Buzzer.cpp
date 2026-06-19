@@ -55,9 +55,18 @@ void buzzerInit() {
 
 void buzzerStartupJingle() {
     if (isMuted()) return;
-    tone(PIN_BUZZER, TONE_FIFTH_LOW_HZ,  TONE_NOTE_MS); delay(TONE_NOTE_MS + 10);
-    tone(PIN_BUZZER, TONE_FIFTH_HIGH_HZ, TONE_NOTE_MS); delay(TONE_NOTE_MS + 10);
-    noTone(PIN_BUZZER);
+    // Drive the LEDC peripheral directly rather than tone(): at boot (before the
+    // UI task starts) tone()'s lazily-created background task can swallow the very
+    // first notes, which left the startup jingle silent. A direct attach/writeTone
+    // is deterministic. Detach afterwards so tone() can re-own the pin at runtime.
+    const uint16_t notes[] = { TONE_FIFTH_LOW_HZ, TONE_FIFTH_HIGH_HZ, TONE_FIFTH_HIGH_HZ * 2 };
+    ledcAttach(PIN_BUZZER, TONE_FIFTH_LOW_HZ, 10);
+    for (uint8_t i = 0; i < 3; i++) {
+        ledcWriteTone(PIN_BUZZER, notes[i]);
+        delay(TONE_NOTE_MS);
+    }
+    ledcWriteTone(PIN_BUZZER, 0);   // silence
+    ledcDetach(PIN_BUZZER);
 }
 
 void buzzerPlay(Sound s) {

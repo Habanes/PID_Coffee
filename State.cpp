@@ -28,6 +28,7 @@ void initState() {
     state.errorReason              = ERR_NONE;
 
     state.displayView              = VIEW_TEMP;
+    state.setEditDecimals          = false;
 }
 
 SystemState stateSnapshot() {

@@ -151,7 +151,10 @@
 
 #define BTN_DEBOUNCE_MS         50
 #define BTN_LONG_PRESS_MS       500
-#define COFFEE_TEMP_STEP        0.5f    // Encoder step in SET_COFFEE view (C)
+// SET_COFFEE has two encoder granularities, toggled by a long button press:
+//   WHOLE = single degrees, FINE = tenths. The selected digit blinks (see Display).
+#define COFFEE_TEMP_STEP_WHOLE  1.0f    // Encoder step editing whole degrees (C)
+#define COFFEE_TEMP_STEP_FINE   0.1f    // Encoder step editing tenths (C)
 #define SHOT_TIME_STEP_MS       1000    // Encoder step in TIMER view (1 s)
 
 
