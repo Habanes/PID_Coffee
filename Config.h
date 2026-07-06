@@ -131,7 +131,7 @@
 // (coffeeTempMax + steamTempMax are SETTINGS - defaults in section 11.)
 // =====================================================================
 
-#define BREW_READY_TEMP         98.0f   // Block must be <= this to START a shot
+#define BREW_READY_TEMP         115.0f   // Block must be <= this to START a shot
 #define STEAM_HYSTERESIS        5.0f    // Steam bang-bang band below target
 #define ERROR_CLEAR_HYSTERESIS  5.0f    // Temp must drop this far below limit
                                         // before ERROR can clear
