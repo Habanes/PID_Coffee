@@ -30,10 +30,11 @@ static void sanitizeLocked() {
     settings.brewKi    = clampd(settings.brewKi,    PID_KI_MIN, PID_KI_MAX);
     settings.brewKd    = clampd(settings.brewKd,    PID_KD_MIN, PID_KD_MAX);
 
-    settings.tempOffset      = clampf(settings.tempOffset,      TEMP_OFFSET_MIN,       TEMP_OFFSET_MAX);
     settings.coffeeTempMax   = clampf(settings.coffeeTempMax,   COFFEE_TEMP_MAX_MIN,   COFFEE_TEMP_MAX_MAX);
     settings.steamTempMax    = clampf(settings.steamTempMax,    STEAM_TEMP_MAX_MIN,    STEAM_TEMP_MAX_MAX);
     settings.safePressureMax = clampf(settings.safePressureMax, SAFE_PRESSURE_MAX_MIN, SAFE_PRESSURE_MAX_MAX);
+    settings.ecoTargetTemp   = clampf(settings.ecoTargetTemp,   ECO_TARGET_TEMP_MIN,   ECO_TARGET_TEMP_MAX);
+    settings.ecoTimeoutMs    = clampu(settings.ecoTimeoutMs,    ECO_TIMEOUT_MS_MIN,    ECO_TIMEOUT_MS_MAX);
 
     if (settings.activePresetIndex >= NUM_PRESETS) settings.activePresetIndex = 0;
 
@@ -70,11 +71,12 @@ static void readNvsLocked() {
     settings.brewKi    = prefs.getDouble("bKi", DEFAULT_BREW_KI);
     settings.brewKd    = prefs.getDouble("bKd", DEFAULT_BREW_KD);
 
-    settings.tempOffset      = prefs.getFloat("off",  DEFAULT_TEMP_OFFSET);
     settings.buzzerMute      = prefs.getBool ("mute", BUZZER_DEFAULT_MUTE);
     settings.coffeeTempMax   = prefs.getFloat("cMax", DEFAULT_COFFEE_TEMP_MAX);
     settings.steamTempMax    = prefs.getFloat("sMax", DEFAULT_STEAM_TEMP_MAX);
     settings.safePressureMax = prefs.getFloat("pMax", DEFAULT_SAFE_PRESSURE_MAX);
+    settings.ecoTargetTemp   = prefs.getFloat("eco",  DEFAULT_ECO_TARGET_TEMP);
+    settings.ecoTimeoutMs    = prefs.getUInt ("ecoT", DEFAULT_ECO_TIMEOUT_MS);
     settings.activePresetIndex = prefs.getUChar("actP", 0);
 
     char k[8];
@@ -103,11 +105,12 @@ static void writeNvsLocked() {
     prefs.putDouble("bKi", settings.brewKi);
     prefs.putDouble("bKd", settings.brewKd);
 
-    prefs.putFloat("off",  settings.tempOffset);
     prefs.putBool ("mute", settings.buzzerMute);
     prefs.putFloat("cMax", settings.coffeeTempMax);
     prefs.putFloat("sMax", settings.steamTempMax);
     prefs.putFloat("pMax", settings.safePressureMax);
+    prefs.putFloat("eco",  settings.ecoTargetTemp);
+    prefs.putUInt ("ecoT", settings.ecoTimeoutMs);
     prefs.putUChar("actP", settings.activePresetIndex);
 
     char k[8];
@@ -152,11 +155,12 @@ void resetSettings() {
     SETTINGS_LOCK();
     settings.heatingKp = DEFAULT_HEATING_KP; settings.heatingKi = DEFAULT_HEATING_KI; settings.heatingKd = DEFAULT_HEATING_KD;
     settings.brewKp    = DEFAULT_BREW_KP;    settings.brewKi    = DEFAULT_BREW_KI;    settings.brewKd    = DEFAULT_BREW_KD;
-    settings.tempOffset      = DEFAULT_TEMP_OFFSET;
     settings.buzzerMute      = BUZZER_DEFAULT_MUTE;
     settings.coffeeTempMax   = DEFAULT_COFFEE_TEMP_MAX;
     settings.steamTempMax    = DEFAULT_STEAM_TEMP_MAX;
     settings.safePressureMax = DEFAULT_SAFE_PRESSURE_MAX;
+    settings.ecoTargetTemp   = DEFAULT_ECO_TARGET_TEMP;
+    settings.ecoTimeoutMs    = DEFAULT_ECO_TIMEOUT_MS;
     settings.activePresetIndex = 0;
     Preset def = {
         DEFAULT_COFFEE_TARGET_TEMP, DEFAULT_STEAM_TARGET_TEMP,
@@ -195,6 +199,7 @@ void settingsSetActivePreset(uint8_t index) {
     if (index >= NUM_PRESETS) return;
     SETTINGS_LOCK();
     settings.activePresetIndex = index;
+    sanitizeLocked();
     writeNvsLocked();
     SETTINGS_UNLOCK();
 }

@@ -29,6 +29,7 @@ void initState() {
 
     state.displayView              = VIEW_TEMP;
     state.setEditDecimals          = false;
+    state.ecoWakeRequested         = false;
 }
 
 SystemState stateSnapshot() {
@@ -40,11 +41,13 @@ SystemState stateSnapshot() {
 
 const char* machineStateText(MachineState s) {
     switch (s) {
-        case STATE_IDLE:   return "Idle";
-        case STATE_COFFEE: return "Coffee";
-        case STATE_STEAM:  return "Steam";
-        case STATE_ERROR:  return "Error";
-        default:           return "?";
+        case STATE_IDLE:      return "Idle";
+        case STATE_COFFEE:    return "Coffee";
+        case STATE_STEAM:     return "Steam";
+        case STATE_HOT_WATER: return "Hot Water";
+        case STATE_ECO:       return "Eco";
+        case STATE_ERROR:     return "Error";
+        default:              return "?";
     }
 }
 
@@ -62,7 +65,6 @@ const char* coffeeSubstateText(CoffeeSubstate s) {
 
 const char* errorReasonText(ErrorReason r) {
     switch (r) {
-        case ERR_BOTH_SWITCHES: return "Both switches active";
         case ERR_OVER_TEMP:     return "Over-temperature";
         case ERR_OVER_PRESSURE: return "Over-pressure";
         case ERR_TEMP_SENSOR:   return "Temp sensor fault";

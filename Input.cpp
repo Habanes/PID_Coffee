@@ -58,13 +58,32 @@ void syncInput() {
         longPress   = true;
     }
 
+    // ECO: any encoder movement or button edge just requests a wake - no view
+    // cycling, no settings edits, nothing else to input in this state.
+    if (ms == STATE_ECO) {
+        if (delta != 0 || shortPress || longPress) {
+            STATE_LOCK();
+            state.ecoWakeRequested = true;
+            STATE_UNLOCK();
+        }
+        return;
+    }
+
     if (ms != STATE_IDLE) return;          // menu locked outside IDLE (edges consumed)
 
     // Long press in SET view: toggle the edit granularity (whole degrees <-> tenths).
+    // Every other view has no dedicated long-press action - fall back to the
+    // short-press behavior (cycle view) rather than leaving the hold a dead end.
     if (longPress) {
         if (view == VIEW_SET_COFFEE) {
             STATE_LOCK();
             state.setEditDecimals = !state.setEditDecimals;
+            STATE_UNLOCK();
+            buzzerPlay(SND_CLICK);
+        } else {
+            DisplayView next = (DisplayView)((view + 1) % DISPLAY_VIEW_COUNT);
+            STATE_LOCK();
+            state.displayView = next;
             STATE_UNLOCK();
             buzzerPlay(SND_CLICK);
         }

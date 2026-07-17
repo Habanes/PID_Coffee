@@ -13,7 +13,9 @@ static void controlTask(void* pv) {
     // Init all control-side hardware/modules on this core.
     setupSwitches();
     setupTemperature();
+#if HAS_PRESSURE_SENSOR
     setupPressure();
+#endif
     setupBrew();
     setupPid();
     setupHeater();
@@ -26,7 +28,9 @@ static void controlTask(void* pv) {
         // 1-3: sense
         readSwitches();
         readTemperature();
+#if HAS_PRESSURE_SENSOR
         readPressure();
+#endif
         // 4: decide (sets heaterMode, target, pump, valve, ...)
         updateBrewStateMachine();
         // 5: control math (uses the fresh target + gain set)

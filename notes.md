@@ -2,7 +2,7 @@
 
 ## Features to build
 
-### Eco mode (design finalized 2026-07-17, not yet implemented)
+### Eco mode (design finalized 2026-07-17, IMPLEMENTED 2026-07-17)
 New first-class `STATE_ECO` in the `MachineState` enum, alongside
 IDLE/COFFEE/STEAM/HOT_WATER/ERROR - not a variant flag on IDLE (that was
 the initial idea, superseded once the safety implications were worked
@@ -34,25 +34,17 @@ Consumer: the brew SM, which performs the actual `STATE_ECO -> STATE_IDLE`
 transition on its next 100ms cycle and clears the flag. Up to ~100ms
 latency between the physical input and the actual wake; imperceptible.
 
-**Switch activation while in ECO is an ERROR, not a mode transition.**
-`swCoffee || swSteam` while `machineState == STATE_ECO` triggers
-`STATE_ERROR` with reason `ERR_SWITCH_FROM_ECO` (new `ErrorReason` value),
-rather than starting COFFEE/STEAM/HOT_WATER directly from a cold block.
-Forces the user through IDLE first (via rotary/button wake) before they
-can brew - deliberately safer and clearer than either silently ignoring
-the switch or allowing a cold-block brew by accident. This ALSO means a
-user CAN still choose to brew at 60 degrees if they want to: wake via
-rotary/button (now in IDLE, warming toward the real target), then
-immediately hit the coffee switch before it's finished warming - the
-existing `BREW_READY_TEMP` gate doesn't care that the block hasn't reached
-`coffeeTargetTemp` yet, so this "just works" with zero special-casing,
-purely as a side effect of routing wake through IDLE. The ERROR clears via
-the normal existing clear-condition (both switches off + temp/pressure/
-sensor OK) - trivially satisfied here since nothing dangerous happened
-physically (heater/pump/valve all off in ERROR's `driveOutputs()` case, as
-today), so it clears back to IDLE almost as soon as the switch is
-released. That's fine/intended - this error's purpose is a UX gate, not a
-physical safety trip.
+**Switch activation while in ECO goes directly to the matching mode - REVISED
+2026-07-17, simpler than the original design.** `swCoffee`/`swSteam`/both
+while `machineState == STATE_ECO` transitions straight to
+COFFEE/STEAM/HOT_WATER respectively, same switch-driven pattern as
+HOT_WATER's own exit logic (see Hot Water mode above) - no gate, no
+intermediate IDLE hop, no new `ErrorReason`. Original design routed this
+through a new `ERR_SWITCH_FROM_ECO` error as a UX gate forcing IDLE first;
+dropped as unnecessary complexity - the user is assumed capable of not
+brewing at the 60-degree eco target if they don't want to, same trust
+model the rest of the switch-driven transitions already use (e.g. nothing
+stops starting a brew moments after a STEAM switch-release either).
 
 **Outputs** (`driveOutputs()`): identical to `STATE_IDLE`'s case
 (`heater = HEATER_PID`, `pump = false`, `valve = false`) - only the PID's
@@ -100,7 +92,13 @@ feedback - NOT the full mode-enter/exit jingle, which stays reserved for
 COFFEE/STEAM/HOT_WATER (genuinely different "machine is now doing X"
 transitions).
 
-### Error message display rework (design finalized 2026-07-17, cross-cutting - not eco-specific, decided while designing eco's new error case)
+### Error message display rework (design finalized 2026-07-17, IMPLEMENTED 2026-07-17, cross-cutting - not eco-specific, decided while designing eco's new error case)
+Implementation note: `ERR_SWITCH_FROM_ECO` (the fourth word originally
+planned, "idLE") was dropped before implementation - see the revised Eco
+mode design above, switches now exit ECO directly rather than erroring.
+Only 3 words shipped: HIGH / PRESS / SEnSOr. Glyphs actually added were
+`I`, `G`, `n` only (not `d`/`L` - those were only needed for the dropped
+"idLE" word).
 Currently ALL errors just show a blinking "Err" on the 7-seg with zero
 detail (you have to check the web GUI to know which of over-temp/
 over-pressure/sensor-fault/etc. actually tripped). Decided to fix this
@@ -130,16 +128,14 @@ short real/near-real words fit and read far better than 2-letter codes:
 patterns). `H` and `O` are already being added for the "too hot to brew"
 and "Hot Water" work above and get reused here too.
 
-### New ErrorReason: ERR_SWITCH_FROM_ECO
-See "Eco mode" above - added to `State.h`'s `ErrorReason` enum and
-`errorReasonText()` ("Switch activated from Eco - return to Idle first").
-Combines with the earlier-decided removal of `ERR_BOTH_SWITCHES` (see
-Hot Water mode section, and "2026-07-16 code review" finding list below) -
-net effect, the enum goes from `{NONE, BOTH_SWITCHES, OVER_TEMP,
-OVER_PRESSURE, TEMP_SENSOR}` to `{NONE, OVER_TEMP, OVER_PRESSURE,
-TEMP_SENSOR, SWITCH_FROM_ECO}`.
+### ErrorReason enum, net effect after Hot Water + Eco
+No new `ErrorReason` value needed for Eco (see revised note above) - only
+change is the earlier-decided removal of `ERR_BOTH_SWITCHES` (see Hot Water
+mode section, and "2026-07-16 code review" finding list below). Net effect,
+the enum goes from `{NONE, BOTH_SWITCHES, OVER_TEMP, OVER_PRESSURE,
+TEMP_SENSOR}` to `{NONE, OVER_TEMP, OVER_PRESSURE, TEMP_SENSOR}`.
 
-### Safety limits (design finalized 2026-07-17, not yet implemented)
+### Safety limits (design finalized 2026-07-17, IMPLEMENTED 2026-07-17)
 Checked against current state first: `coffeeTempMax`, `steamTempMax`, and
 `safePressureMax` already exist as persisted `Settings` fields, already
 clamped via `sanitizeLocked()`, and already have a working "Safety Limits"
@@ -159,7 +155,7 @@ requiring a manual settings change means new/reset installs get safe
 headroom above `BREW_READY_TEMP` automatically, without relying on
 remembering to raise it by hand.
 
-### Hot Water mode (design finalized 2026-07-16, not yet implemented)
+### Hot Water mode (design finalized 2026-07-16, IMPLEMENTED 2026-07-17)
 Originally noted as "Tea Water": instead of evaluating both switches
 pressed as an error, treat it as a fourth first-class operating mode - full
 design below, decided via grill session, ready to implement.
@@ -240,7 +236,7 @@ tables, section 7's safety model text, section 8's buzzer/display
 behavior) - it's the project's single source of truth and currently only
 describes 3 modes + ERROR.
 
-### Presets (design finalized 2026-07-17, not yet implemented)
+### Presets (design finalized 2026-07-17, web-GUI fixes IMPLEMENTED 2026-07-17)
 Original complaint: "presets currently do not work correctly." Grilled and
 narrowed down to a specific, confirmed symptom: the preset selection
 buttons in the web GUI "don't seem to do things."
@@ -287,18 +283,196 @@ symptoms (e.g. "the *values* within a preset are wrong" vs. "the
 *selection* doesn't stick" vs. something else) - those would point at a
 different, not-yet-found bug.
 
-### Pressure sensor optional
+### Pressure sensor optional (design finalized 2026-07-17, IMPLEMENTED 2026-07-17)
 Some machine variants don't have a pressure sensor. Add a config variable
 that disables the pressure feature - all logic around pressure and the
-pressure elements in the GUI. Find a low-effort way to do this.
+pressure elements in the GUI.
 
-### Calibration offset removal
-Remove the `tempOffset` feature completely: from Config.h, Settings, the
-web GUI, and persisted NVS storage. Not necessary.
+**Toggle mechanism**: new compile-time `#define HAS_PRESSURE_SENSOR 1` in
+`Config.h`, alongside the existing `PIN_PRESSURE`/`PRESSURE_*` hardware
+defines - it IS a hardware config, not a user preference, so it belongs
+there rather than as a persisted runtime `Settings` toggle. Flip to `0` and
+reflash for a no-sensor build. Lowest-effort option: disabled branches
+compile out entirely, dead GUI markup never ships in the binary, and no new
+persisted state/NVS key/API surface is needed.
+
+**Sensor read** (`ControlTask.cpp`): wrap the `setupPressure()` and
+`readPressure()` calls in `#if HAS_PRESSURE_SENSOR ... #endif`. When
+disabled, `state.currentPressure`/`state.pressureVoltage` simply stay at
+their zero-initialized defaults forever - `Pressure.cpp` itself is left
+untouched (still compiled in, just never called; negligible flash cost,
+lower effort than also gutting that file).
+
+**Safety trip logic** (`BrewStateMachine.cpp`): the over-pressure trip
+(`overPressNow = pressure > safePressureMax`) and the ERROR-clear check
+(`pressOk = pressure < safePressureMax`) both get `#if HAS_PRESSURE_SENSOR`
+guards - forced to `false`/`true` respectively when disabled, so a
+permanently-zero `currentPressure` can never trip an error and can never
+block ERROR from clearing.
+
+**Preinfuse->Bloom transition**: NO code change needed. The existing
+condition is already `pressure >= p.preinfuseTargetBar || subElapsed >=
+p.preinfuseMaxMs` - with pressure permanently 0 and any sane
+`preinfuseTargetBar` > 0, the pressure side of the OR simply never
+fires, and the substate advances purely on the existing `preinfuseMaxMs`
+timeout. Degrades to time-only preinfuse automatically, for free.
+
+**Settings fields left alone** (`safePressureMax`, `preinfuseTargetBar`):
+NOT stripped from `Settings`/NVS/sanitize - low-effort call, they're
+harmless-but-inert when disabled (never read in the trip logic above;
+`preinfuseTargetBar` never satisfied per the point above). Only their GUI
+exposure is trimmed (below), not the underlying storage.
+
+**Web GUI** (`Web.cpp`), all gated behind `#if HAS_PRESSURE_SENSOR` /
+`#endif` around the relevant chunks of the `PROGMEM` raw-string literals
+(adjacent raw strings concatenate fine around a preprocessor block - same
+technique as any other compile-time-optional HTML fragment):
+  - The standalone "Pressure" live-value card (current card showing
+    `pressureVal` in Bar) - removed entirely from the dashboard when
+    disabled.
+  - The `safePressureMax` field in the "Safety Limits" card's 3-column
+    grid - dropped, leaving 2 of 3 cells filled (coffee max, steam max),
+    same "leave the grid as-is" precedent as the tempOffset removal above.
+  - The two diagnostics rows ("Pressure Pin Voltage", "Calculated
+    Pressure").
+  - Corresponding `SCRIPT_JS` lines: the `pressureVal`/diagnostic DOM
+    updates, `safePressureMax` in `loadSettings()`, and `safePressureMax`
+    in `applySafety()`'s posted object.
+  - JSON payload: `pressure`/`pressureV` dropped from `handleState()`,
+    `safePressureMax` dropped from both `handleState()` and
+    `handleSettings()`.
+  - **Not touched**: the Brew Timing card's "Pre-infuse target (Bar)"
+    field (`preinfuseTargetBar`) stays visible even when disabled - it's
+    embedded inline in a 4-field grid row (pre-infuse max / target-bar /
+    bloom / preheat), so hiding it would require restructuring that row's
+    layout. Left as an inert-but-harmless field per the "low-effort" brief
+    above; revisit only if it turns out to actually confuse users on
+    no-sensor builds.
+
+**`DOCUMENTATION.txt`**: needs a note added (wherever the pressure
+process/safety-limit tables live) that pressure support is a compile-time
+option via `HAS_PRESSURE_SENSOR`, and what changes/degrades when it's off.
+
+### Calibration offset removal (design finalized 2026-07-17, IMPLEMENTED 2026-07-17)
+Remove the `tempOffset` feature completely - a per-machine calibration knob
+(default 5 degrees C, range 0-10) subtracted from the EMA-filtered raw TSIC
+reading in `Temperature.cpp` to compensate for the sensor reading hotter
+than the water at the puck. Decided: not necessary, remove entirely rather
+than keep as dead weight.
+
+**Touch points (8 total):**
+  - `Config.h`: remove `DEFAULT_TEMP_OFFSET`, `TEMP_OFFSET_MIN`,
+    `TEMP_OFFSET_MAX`.
+  - `Settings.h`: remove the `tempOffset` field from the `Settings` struct.
+  - `Settings.cpp`: remove the `sanitizeLocked()` clamp, the NVS load
+    (`prefs.getFloat("off", ...)`), the NVS save (`prefs.putFloat("off",
+    ...)`), and the `resetSettings()` default assignment - four separate
+    lines, one per lifecycle stage, same pattern as every other field.
+  - `Temperature.cpp`: `readTemperature()` currently does
+    `state.currentTemperature = filtered - offset;` after reading
+    `settings.tempOffset` under `SETTINGS_LOCK()`. Simplifies to
+    `state.currentTemperature = filtered;` directly, no settings lock
+    needed at all in this function anymore.
+  - `Temperature.h`: update the header comment ("Reads the TSIC, subtracts
+    the calibration offset...") to drop the offset mention.
+  - `Web.cpp` (3 spots): remove the `tempOffset` `<input>` from the
+    "Temperature & Steam" card; remove `$('tempOffset').value = s.tempOffset`
+    from `loadSettings()`; remove `tempOffset` from the object posted by
+    `applyTempSteam()`; remove it from both `handleState()`'s JSON output
+    and `handleSettings()`'s parse.
+  - `DOCUMENTATION.txt`: remove the `tempOffset` row from the process/
+    settings tables (section 1, section on defaults), drop "+ tempOffset"
+    from the Temperature pipeline description, and reword the "Temperature
+    is calibrated at the source" paragraph (section on data flow) since
+    there's no calibration step anymore - `currentTemperature` is simply
+    the EMA-filtered raw reading.
+
+**GUI layout after removal**: the "Temperature & Steam" card's 3-column
+grid row currently holds offset field + steam-target field + Apply button.
+Dropping the offset div leaves 2 of 3 cells filled (steam-target field,
+button) - grid markup and CSS left as-is, no restructuring; the empty
+third cell is a non-issue. Card title unchanged ("Temperature & Steam")
+even though only the steam-target field remains, to avoid a churny rename
+for a single-field card.
+
+**NVS**: the persisted key (`"off"`) is left orphaned on devices that
+already saved a value - no migration/erase logic added. It's a few unused
+bytes in flash, harmless, consistent with how the codebase doesn't clean up
+other removed keys either.
+
+### WiFi credentials editable via GUI (design finalized 2026-07-17, IMPLEMENTED 2026-07-17)
+Originally noted as "wifi passwort einstellen über esp wifi". Today
+`WIFI_SSID`/`WIFI_PASSWORD` are hardcoded in `Config.h`; `setupWeb()` tries
+station mode with those compiled-in values for ~10s
+(`WIFI_CONNECT_ATTEMPTS=20 * WIFI_CONNECT_DELAY_MS=500`), then falls back
+to a hardcoded AP (`AP_SSID="QuickMill-PID"`, `AP_PASSWORD="changeme123"`).
+Changing networks today means re-flashing.
+
+**Target behavior**: on boot, read station SSID/password from NVS and try
+to connect for up to ~1 minute. If that network isn't found or can't be
+joined in time, fall back to a self-hosted AP - renamed to
+`AP_SSID="PID_COFFEE"`, `AP_PASSWORD="ESPRESSO26"` (`Config.h` constants
+updated). The full web GUI is already served identically in AP mode as in
+station mode (no new code needed there) - so a user with no home WiFi at
+all can just connect directly to `PID_COFFEE` and run the machine
+entirely over the self-hosted AP, indefinitely, no external network ever
+required. If they DO want the machine on their home network, they connect
+to `PID_COFFEE` once and use a new GUI card to submit their real
+SSID/password, which is what gets tried on the next boot.
+
+**Boot timeout**: bump `WIFI_CONNECT_ATTEMPTS`/`WIFI_CONNECT_DELAY_MS` in
+`Config.h` so the retry window totals ~60s instead of ~10s (e.g.
+`WIFI_CONNECT_ATTEMPTS=60`, `WIFI_CONNECT_DELAY_MS=1000`) before falling
+back to AP mode.
+
+**Applying new credentials, deliberately minimal**: submitting the GUI
+form only persists the new station SSID/password to NVS - nothing else
+happens live. No `WiFi.disconnect()`/`WiFi.begin()` retry, no forced
+reboot. The device keeps running exactly as it was (stays in AP mode if
+that's where it already was) and only picks up the new stored credentials
+naturally on the next restart (power cycle, crash recovery, future OTA,
+etc.). Nothing to gate on `machineState == IDLE` either, since nothing
+about the currently-running machine changes.
+
+**Storage**: new `Preferences` instance/namespace owned by `Web.cpp`
+itself (e.g. `"wifi"`, keys `"ssid"`/`"pass"`) - separate from the existing
+`Settings.cpp`/`settings` NVS namespace, since WiFi credentials aren't a
+machine-tuning `Settings` field. `setupWeb()` reads these at boot; if
+absent (fresh install, nothing saved yet), falls back to the compile-time
+`WIFI_SSID`/`WIFI_PASSWORD` from `Config.h` exactly as today - those
+defines stay as the first-boot fallback, not removed.
+
+**GUI**: new "WiFi" card on the main dashboard, same structural pattern as
+every other settings card - SSID text field, password field
+(`type="password"`), one Apply button. SSID field prefilled from the
+currently-stored/active value (non-secret, fetched via a new field on the
+existing settings-load response). Password field always left BLANK on
+load - the stored password is never echoed back to the browser; whatever
+is in the field when Apply is clicked is saved verbatim, no client-side
+validation added (consistent with every other settings card here, none of
+which validate client-side either). New `POST /api/wifi` handler, NOT
+routed through `Settings.cpp`'s existing settings machinery - separate
+NVS namespace, separate concern.
+
+**Implementation note**: the WiFi card's inputs/button deliberately do NOT
+get the `cfg` CSS class every other settings control uses - `cfg` is what
+the existing `.locked input.cfg, .locked button.cfg { pointer-events: none;
+}` rule targets to grey out controls whenever `machineState != IDLE`. Since
+this feature is explicitly not IDLE-gated, giving the WiFi fields that class
+would have silently fought the design (greyed out and inert during a brew,
+even though nothing about saving prevents it). Caught during implementation,
+not part of the original design write-up above.
+
+**Not addressed, out of scope for this pass**: no mDNS/friendly-hostname
+(e.g. `coffeepid.local`) - if the new network gives the device a different
+IP after the next restart, a browser tab pointed at the old IP simply
+stops working and the user has to rediscover the new IP (same
+rediscovery step as today's existing AP/STA fallback switch already
+requires). Worth a future look, not required for this feature to be
+useful.
 
 ### Later / not now
 - Update over the air (OTA)
-- Set WiFi password via the ESP's own AP (instead of hardcoded in Config.h)
 - Recordings: record a shot (curve, values) and store it for later review
 
 
@@ -324,9 +498,11 @@ Two independent contributors identified during the 2026-07-16 review, see
 ## 2026-07-16 code review - findings and decisions
 
 Full-codebase read-through + grill session. Each item below is a decision
-already made; nothing has been implemented yet except this note.
+already made. Status as of 2026-07-17: findings #1, #2, #3, #7, #8, #9 fixed;
+#4 is a comment-only decision (also done); #5 and #6 remain deferred; #10
+remains open (design finalized, not implemented).
 
-### 1. FIX NEXT - ERROR-clear check uses the wrong temperature limit
+### 1. FIXED 2026-07-17 - ERROR-clear check uses the wrong temperature limit
 `BrewStateMachine.cpp` line ~147:
 ```
 bool tempOk = temp < (steamTempMax - ERROR_CLEAR_HYSTERESIS);
@@ -351,7 +527,7 @@ Rejected alternative: always clear against `coffeeTempMax` unconditionally
 - simpler, but overly conservative for STEAM-mode trips (would force
 cooling further than necessary after a steam overtemp).
 
-### 2. BREW_READY_TEMP (115) vs coffeeTempMax (110) - documentation only
+### 2. FIXED 2026-07-17 - BREW_READY_TEMP (115) vs coffeeTempMax (110) - documentation only
 `Config.h` has `BREW_READY_TEMP = 115.0f`, sitting above the default
 `coffeeTempMax` (110) that trips ERROR during a brew - an inversion that,
 combined with bug #1 above, produced the observed error-loop (start a brew
@@ -368,7 +544,7 @@ a documentation one.
 115 change). FIX: update the doc to say 115, matching `Config.h`. Text-only
 change, no behavior risk.
 
-### 3. FIX - settingsSetActivePreset() skips sanitizeLocked()
+### 3. FIXED 2026-07-17 - settingsSetActivePreset() skips sanitizeLocked()
 `Settings.cpp`: every other settings mutator (`settingsApply`,
 `settingsAdjustCoffeeTarget`, `settingsAdjustShotTime`, `resetSettings`)
 calls `sanitizeLocked()` before persisting. `settingsSetActivePreset()`
@@ -379,7 +555,7 @@ out-of-range values until something else triggers a sanitize.
 Fix: add a `sanitizeLocked()` call before `writeNvsLocked()` in
 `settingsSetActivePreset()`, matching the other three mutators. One line.
 
-### 4. DECIDED AGAINST - centralizing IDLE-only write enforcement
+### 4. DECIDED AGAINST - centralizing IDLE-only write enforcement (comment added 2026-07-17)
 Considered adding a `machineState == IDLE` check inside `Settings.cpp`'s
 mutators themselves (instead of relying on each caller - `Web.cpp`
 handlers, `Input.cpp` - to check independently). Rejected: this would give
@@ -411,7 +587,7 @@ for "tens of ms"). Candidate fix: accept the edit into the in-RAM struct
 immediately, defer the actual NVS write until N ms of no further encoder
 activity (debounce-on-idle). Deferred, not implemented.
 
-### 7. FIX - web dashboard's Chart.js is CDN-loaded, breaks in AP-fallback mode
+### 7. FIXED 2026-07-17 - web dashboard's Chart.js is CDN-loaded, breaks in AP-fallback mode
 `Web.cpp`'s `INDEX_HTML` loads `https://cdn.jsdelivr.net/npm/chart.js`.
 The device's AP-fallback mode (`QuickMill-PID` SSID) exists specifically
 for when there's no WiFi network to join - i.e. no internet path either -
@@ -425,7 +601,7 @@ minified is roughly 200KB; trivial against the 3MB APP partition on the
 N16R8 module, and it's PROGMEM/flash, not NVS, so it doesn't touch the
 settings storage.
 
-### 8. FIX - long-press is a dead end outside VIEW_SET_COFFEE
+### 8. FIXED 2026-07-17 - long-press is a dead end outside VIEW_SET_COFFEE
 `Input.cpp`: holding the button past `BTN_LONG_PRESS_MS` sets
 `longHandled = true` in any view, but only `VIEW_SET_COFFEE` has an actual
 long-press action (toggling whole-degree vs tenths editing). In every
@@ -439,7 +615,7 @@ the current view has no long-press action of its own, rather than giving
 long-press a new job in those views. Smallest, most surgical change -
 removes the dead end without introducing new UX to design.
 
-### 9. FIX - Buzzer seq[4] has no bounds check; naming note
+### 9. FIXED 2026-07-17 - Buzzer seq[4] has no bounds check; naming note
 `Buzzer.cpp`'s `Step seq[4]` is sized for today's largest sequence (2
 steps, `SND_MODE_ENTER`/`SND_MODE_EXIT`). `buildSequence()` writes into it
 with no bounds check - safe today, but a silent stack-array overflow
@@ -461,9 +637,12 @@ BREW_READY_TEMP`, the coffee switch is being silently ignored by the
 BREW_READY_TEMP gate with zero feedback. Decided to add explicit feedback,
 both places:
 
-**7-seg (Display.cpp):** blinking "HOT" (`H O t`, blank 4th digit), same
-blink pattern as the existing `renderErrorBlink()` "Err" screen, fully
-overriding whatever menu view was selected - same precedent as how
+**7-seg (Display.cpp):** blinking "HOT" (`H O t`, blank 4th digit) - NOTE:
+`renderErrorBlink()` (the blink-pattern precedent this cited) was removed by
+the "Error message display rework" above (implemented 2026-07-17); reuse its
+on/off blink-timer pattern from `renderSetCoffee()` instead, still available
+as precedent. Fully overriding whatever menu view was selected - same
+precedent as how
 `STATE_STEAM`/`STATE_ERROR` already hard-override the IDLE menu-view
 switch in `refreshDisplay()`. Needs one new glyph, `CHAR_H` (segments
 b,c,e,f,g); `O` can reuse the existing `digitSeg[0]` pattern, no new glyph

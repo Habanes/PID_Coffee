@@ -1,6 +1,5 @@
 #include "Temperature.h"
 #include "State.h"
-#include "Settings.h"
 #include "Config.h"
 #include <TSIC.h>
 
@@ -26,17 +25,12 @@ void readTemperature() {
         }
     }
 
-    // 2. Calibration offset (sensor reads hotter than the water at the puck).
-    SETTINGS_LOCK();
-    float offset = settings.tempOffset;
-    SETTINGS_UNLOCK();
-
-    // 3. Fault if no valid reading for too long.
+    // 2. Fault if no valid reading for too long.
     bool fault = (millis() - lastValidMs) > TEMP_ERROR_INTERVAL_MS;
 
-    // 4. Publish the TRUE temperature.
+    // 3. Publish the temperature.
     STATE_LOCK();
-    state.currentTemperature     = filtered - offset;
+    state.currentTemperature     = filtered;
     state.temperatureSensorError = fault;
     STATE_UNLOCK();
 }

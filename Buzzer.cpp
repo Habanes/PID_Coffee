@@ -9,8 +9,9 @@ struct Step { uint16_t freq; uint16_t durMs; };
 
 static QueueHandle_t soundQueue = NULL;
 
-// Active one-shot sequence
-static Step     seq[4];
+// Active one-shot sequence (sized with headroom above today's longest
+// sequence - 2 steps, SND_MODE_ENTER/SND_MODE_EXIT - for future jingles).
+static Step     seq[8];
 static uint8_t  seqLen = 0, seqIdx = 0;
 static bool     seqActive = false;
 static uint32_t stepStartMs = 0;

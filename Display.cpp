@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Web.h"   // webGetIp()
 #include <SevSeg.h>
+#include <string.h>   // strlen
 
 static SevSeg sevseg;
 
@@ -19,8 +20,45 @@ static const byte CHAR_P = 0b01110011;
 static const byte CHAR_S = 0b01101101;   // identical glyph to '5' on 7-seg
 static const byte CHAR_t = 0b01111000;
 static const byte CHAR_r = 0b01010000;
+static const byte CHAR_H = 0b01110110;
+static const byte CHAR_I = 0b00000110;   // identical glyph to '1' on 7-seg
+static const byte CHAR_G = 0b00111101;
+static const byte CHAR_n = 0b01010100;
 static const byte CHAR_DASH = 0b01000000;
 static const byte SEG_DP = 0b10000000;
+
+// Maps a character to its glyph for the scrolling views (IP address, error
+// words). Digits, '.', and the specific letters those two use; anything else
+// blanks rather than guessing at a glyph.
+static byte charGlyph(char c) {
+    if (c >= '0' && c <= '9') return digitSeg[c - '0'];
+    switch (c) {
+        case '.': return CHAR_DASH;
+        case 'C': return CHAR_C;
+        case 'E': return CHAR_E;
+        case 'G': return CHAR_G;
+        case 'H': return CHAR_H;
+        case 'I': return CHAR_I;
+        case 'n': return CHAR_n;
+        case 'O': return digitSeg[0];
+        case 'P': return CHAR_P;
+        case 'r': return CHAR_r;
+        case 'S': return CHAR_S;
+        case 't': return CHAR_t;
+        default:  return CHAR_BLANK;
+    }
+}
+
+// Short 7-seg-legible word for each error reason - "PRESS"/"SEnSOr" scroll
+// across the 4 digits (see renderErrorScroll); "HIGH" fits in one frame.
+static const char* errorWord(ErrorReason r) {
+    switch (r) {
+        case ERR_OVER_TEMP:     return "HIGH";
+        case ERR_OVER_PRESSURE: return "PRESS";
+        case ERR_TEMP_SENSOR:   return "SEnSOr";
+        default:                return "ERR";
+    }
+}
 
 void setupDisplay() {
     byte digitPins[]   = { PIN_DISP_DIGIT1, PIN_DISP_DIGIT2, PIN_DISP_DIGIT3, PIN_DISP_DIGIT4 };
@@ -100,12 +138,30 @@ static void renderPreset(uint8_t index) {
     sevseg.setSegments(s);
 }
 
-static void renderErrorBlink() {
-    static uint32_t last = 0; static bool on = true;
-    if (millis() - last >= DISPLAY_BLINK_CYCLE_MS) { on = !on; last = millis(); }
-    byte s[4];
-    if (on) { s[0] = CHAR_E; s[1] = CHAR_r; s[2] = CHAR_r; s[3] = CHAR_BLANK; }
-    else    { s[0] = s[1] = s[2] = s[3] = CHAR_BLANK; }
+// No blink phase - straight to the scrolling word on ERROR entry. Words
+// <= 4 chars (e.g. "HIGH") just fill the display once and re-render
+// identically every wrap, which reads as static.
+static void renderErrorScroll(ErrorReason reason) {
+    static uint32_t last = 0;
+    static int pos = 0;
+    if (millis() - last < DISPLAY_IP_SCROLL_MS) return;
+    last = millis();
+
+    const char* word = errorWord(reason);
+    int len = (int)strlen(word);
+
+    byte s[4] = { CHAR_BLANK, CHAR_BLANK, CHAR_BLANK, CHAR_BLANK };
+    for (int i = 0; i < 4; i++) {
+        int cp = pos + i;
+        if (cp < len) s[i] = charGlyph(word[cp]);
+    }
+    sevseg.setSegments(s);
+    if (++pos >= len) pos = 0;
+}
+
+// Static (not blinking - eco is an expected, hands-off background state).
+static void renderEco() {
+    byte s[4] = { CHAR_E, CHAR_C, digitSeg[0], CHAR_BLANK };
     sevseg.setSegments(s);
 }
 
@@ -120,11 +176,7 @@ static void renderIpScroll() {
     byte s[4] = { CHAR_BLANK, CHAR_BLANK, CHAR_BLANK, CHAR_BLANK };
     for (int i = 0; i < 4; i++) {
         int cp = pos + i;
-        if (cp < (int)ip.length()) {
-            char c = ip.charAt(cp);
-            if (c >= '0' && c <= '9') s[i] = digitSeg[c - '0'];
-            else if (c == '.')        s[i] = CHAR_DASH;
-        }
+        if (cp < (int)ip.length()) s[i] = charGlyph(ip.charAt(cp));
     }
     sevseg.setSegments(s);
     if (++pos >= (int)ip.length()) pos = 0;
@@ -146,8 +198,14 @@ void refreshDisplay() {
         case STATE_STEAM:
             renderTemp(s.currentTemperature, CHAR_DASH);              // hot block temp
             return;
+        case STATE_HOT_WATER:
+            renderTemp(s.currentTemperature, CHAR_H);                 // hot block temp, cooling
+            return;
+        case STATE_ECO:
+            renderEco();
+            return;
         case STATE_ERROR:
-            renderErrorBlink();
+            renderErrorScroll(s.errorReason);
             return;
         default: break;   // IDLE -> menu views below
     }

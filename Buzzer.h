@@ -9,7 +9,7 @@
 enum Sound {
     SND_TICK,        // encoder step
     SND_CLICK,       // button press
-    SND_MODE_ENTER,  // entering COFFEE/STEAM - ascending perfect fifth
+    SND_MODE_ENTER,  // entering COFFEE/STEAM/HOT_WATER - ascending perfect fifth
     SND_MODE_EXIT    // leaving to IDLE - descending
 };
 

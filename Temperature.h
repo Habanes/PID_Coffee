@@ -1,8 +1,8 @@
 #ifndef TEMPERATURE_H
 #define TEMPERATURE_H
 
-// Process 2 - Temperature. Reads the TSIC, subtracts the calibration offset,
-// EMA-filters, and publishes currentTemperature + temperatureSensorError.
+// Process 2 - Temperature. Reads the TSIC, EMA-filters, and publishes
+// currentTemperature + temperatureSensorError.
 // See ../Processes.txt (2).
 
 void setupTemperature();    // call once in ControlTask init

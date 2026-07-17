@@ -95,6 +95,8 @@
 // =====================================================================
 
 #define EMA_ALPHA               0.6f    // EMA smoothing (1 = raw, 0 = max)
+                                         // (unrelated to PID_EMA_FACTOR below -
+                                         // shares the same default by coincidence)
 #define EMA_SEED                20.0f   // Startup seed (room temp)
 #define TEMP_MIN_VALID          0.0f    // Below -> sensor glitch
 #define TEMP_MAX_VALID          180.0f  // Above -> sensor glitch
@@ -106,7 +108,15 @@
 // Wiring: sensor OUT -> R1=2.2k -> GPIO, R2=5.1k -> GND. Ratiometric 5V:
 // 0.5 V = 0 Bar, 4.5 V = full scale. No fault flag (over-range trips
 // safePressureMax on its own).
+//
+// Some machine variants don't have a pressure sensor wired at all. Flip this
+// to 0 and reflash for a no-sensor build: the sensor read, the over-pressure
+// safety trip, and the pressure-related GUI elements all compile out.
+// currentPressure then stays permanently 0, which degrades preinfuse to a
+// pure preinfuseMaxMs timeout automatically (see BrewStateMachine.cpp).
 // =====================================================================
+
+#define HAS_PRESSURE_SENSOR     1
 
 #define PRESSURE_RANGE_BAR      16.0f   // Full-scale Bar (match ordered sensor)
 #define PRESSURE_DIVIDER_RATIO  0.6986f // R2/(R1+R2) = 5100/7300
@@ -123,6 +133,8 @@
 #define HEATER_TIMER_INTERVAL_MS 10     // ISR period (= 100 Hz)
 #define PID_IMAX                55.0     // Integrator clamp
 #define PID_EMA_FACTOR          0.6      // EMA on PID derivative input
+                                          // (unrelated to EMA_ALPHA above -
+                                          // shares the same default by coincidence)
 
 
 // =====================================================================
@@ -164,7 +176,7 @@
 // ERROR: repeating beep-boop siren. All playback non-blocking.
 // =====================================================================
 
-#define BUZZER_DEFAULT_MUTE     false
+#define BUZZER_DEFAULT_MUTE     true
 
 #define TONE_TICK_HZ            2000     // Encoder step click
 #define TONE_CLICK_HZ          1500     // Button press click
@@ -182,14 +194,18 @@
 // NOTE: fill in real credentials locally - do NOT commit secrets.
 // =====================================================================
 
+// WIFI_SSID/WIFI_PASSWORD are only the FIRST-BOOT fallback, used when nothing
+// has been saved yet in the "wifi" NVS namespace. Once a user submits station
+// credentials via the web GUI's WiFi card, those NVS values take over on the
+// next boot - see setupWeb() in Web.cpp.
 #define WIFI_SSID               "BabaLan"
 #define WIFI_PASSWORD           "bittegibmirinternet"
-#define AP_SSID                 "QuickMill-PID"
-#define AP_PASSWORD             "changeme123"
+#define AP_SSID                 "PID_COFFEE"
+#define AP_PASSWORD             "ESPRESSO26"
 
 #define WEBSERVER_PORT          80
-#define WIFI_CONNECT_ATTEMPTS   20
-#define WIFI_CONNECT_DELAY_MS   500
+#define WIFI_CONNECT_ATTEMPTS   60      // ~60s total before falling back to AP mode
+#define WIFI_CONNECT_DELAY_MS   1000
 #define WEB_BODY_READ_TIMEOUT_MS 1000
 #define WEB_SEND_BUFFER_SIZE    1024
 
@@ -219,13 +235,8 @@
 #define PID_KD_MIN              0.0
 #define PID_KD_MAX              2000.0
 
-// ---- Global: sensor offset (subtracted at the temperature process) ----
-#define DEFAULT_TEMP_OFFSET     5.0f
-#define TEMP_OFFSET_MIN         0.0f
-#define TEMP_OFFSET_MAX         10.0f
-
 // ---- Global: safety limits ----
-#define DEFAULT_COFFEE_TEMP_MAX 110.0f  // ERROR in COFFEE
+#define DEFAULT_COFFEE_TEMP_MAX 120.0f  // ERROR in COFFEE
 #define COFFEE_TEMP_MAX_MIN     100.0f
 #define COFFEE_TEMP_MAX_MAX     140.0f
 #define DEFAULT_STEAM_TEMP_MAX  145.0f  // ERROR in IDLE/STEAM + ISR cutoff (< 150 sensor ceiling)
@@ -234,6 +245,14 @@
 #define DEFAULT_SAFE_PRESSURE_MAX 14.0f
 #define SAFE_PRESSURE_MAX_MIN   1.0f
 #define SAFE_PRESSURE_MAX_MAX   16.0f
+
+// ---- Global: eco mode ----
+#define DEFAULT_ECO_TARGET_TEMP 60.0f
+#define ECO_TARGET_TEMP_MIN     30.0f
+#define ECO_TARGET_TEMP_MAX     80.0f
+#define DEFAULT_ECO_TIMEOUT_MS  300000UL   // 5 minutes
+#define ECO_TIMEOUT_MS_MIN      60000UL    // 1 minute
+#define ECO_TIMEOUT_MS_MAX      3600000UL  // 60 minutes
 
 // ---- Per-preset: targets ----
 #define DEFAULT_COFFEE_TARGET_TEMP 93.0f

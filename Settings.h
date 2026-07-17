@@ -30,11 +30,12 @@ struct Settings {
     // Brew PID (Ki disabled during brew)
     double brewKp, brewKi, brewKd;
     // Global
-    float   tempOffset;         // subtracted at the temperature process
     bool    buzzerMute;
     float   coffeeTempMax;      // ERROR in COFFEE
     float   steamTempMax;       // ERROR in IDLE/STEAM + ISR cutoff
     float   safePressureMax;    // ERROR all modes
+    float   ecoTargetTemp;      // PID target while in ECO
+    uint32_t ecoTimeoutMs;      // continuous IDLE time before auto-entering ECO
     uint8_t activePresetIndex;
     // Presets
     Preset  preset[NUM_PRESETS];
@@ -56,6 +57,8 @@ Settings settingsSnapshot();
 Preset   activePreset();
 
 // Config-layer edits (lock + clamp + persist internally).
+// Caller must ensure machineState == IDLE before calling any of these -
+// not enforced here (would give Settings.cpp a dependency on State.h).
 void settingsApply(const Settings& incoming);   // web: store whole struct
 void settingsSetActivePreset(uint8_t index);     // menu: PRESET view
 void settingsAdjustCoffeeTarget(float deltaC);   // menu: SET_COFFEE view

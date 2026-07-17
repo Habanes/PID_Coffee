@@ -11,7 +11,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-enum MachineState   { STATE_IDLE, STATE_COFFEE, STATE_STEAM, STATE_ERROR };
+enum MachineState   { STATE_IDLE, STATE_COFFEE, STATE_STEAM, STATE_HOT_WATER, STATE_ECO, STATE_ERROR };
 
 enum CoffeeSubstate { SUB_NONE, SUB_PREINFUSE, SUB_BLOOM, SUB_PREHEAT,
                       SUB_BREW_MAX, SUB_BREW_PID, SUB_DONE };
@@ -22,7 +22,7 @@ enum DisplayView    { VIEW_TEMP, VIEW_SET_COFFEE, VIEW_TIMER,
                       VIEW_PRESET, VIEW_IP };
 #define DISPLAY_VIEW_COUNT 5
 
-enum ErrorReason    { ERR_NONE, ERR_BOTH_SWITCHES, ERR_OVER_TEMP,
+enum ErrorReason    { ERR_NONE, ERR_OVER_TEMP,
                       ERR_OVER_PRESSURE, ERR_TEMP_SENSOR };
 
 struct SystemState {
@@ -53,6 +53,8 @@ struct SystemState {
     // --- UI (writer: input process) ---
     DisplayView    displayView;
     bool           setEditDecimals;   // SET_COFFEE: edit tenths (true) vs whole degrees (false)
+    bool           ecoWakeRequested;  // set on any encoder/button edge while in ECO;
+                                      // consumed + cleared by the brew SM
 };
 
 extern SystemState state;
