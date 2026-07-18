@@ -622,7 +622,24 @@ R"HTML(
                 </div>
             </div>
         </div>
-
+)HTML"
+#if SIMULATION_MODE
+R"HTML(
+        <!-- Simulation - fake switches, no physical steam/coffee switch wired -->
+        <div class="card">
+            <div class="card-title">Simulation</div>
+            <div class="btn-row" style="margin-top:0">
+                <button class="btn-primary" id="simCoffeeBtn" onclick="toggleSimSwitch('coffee')">Coffee Switch</button>
+                <button class="btn-primary" id="simSteamBtn" onclick="toggleSimSwitch('steam')">Steam Switch</button>
+            </div>
+            <div style="margin-top:10px;font-size:0.82em;color:rgba(182,146,110,0.5);">
+                SIMULATION_MODE build - temperature/pressure are a toy model, not real
+                sensors, and these buttons stand in for the unwired physical switches.
+            </div>
+        </div>
+)HTML"
+#endif
+R"HTML(
         <!-- WiFi -->
         <div class="card">
             <div class="card-title">WiFi</div>
@@ -825,6 +842,25 @@ async function applyWifi(btn) {
     $('wifiPass').value = '';
     flash(btn);
 }
+)JS"
+#if SIMULATION_MODE
+R"JS(
+// Fake switch toggles (SIMULATION_MODE) - sends the full pair each time so
+// the handler never has to guess a default for the field left unchanged.
+async function toggleSimSwitch(which) {
+    const next = { coffee: $('simCoffeeBtn').classList.contains('active'),
+                   steam:  $('simSteamBtn').classList.contains('active') };
+    next[which] = !next[which];
+    await fetch('/api/sim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(next) });
+}
+function updateSimButtons(swCoffee, swSteam) {
+    const c = $('simCoffeeBtn'), s = $('simSteamBtn');
+    if (c) c.classList.toggle('active', swCoffee);
+    if (s) s.classList.toggle('active', swSteam);
+}
+)JS"
+#endif
+R"JS(
 
 // ---- Live state ----
 function led(id, on, onText, offText) {
@@ -833,7 +869,7 @@ function led(id, on, onText, offText) {
     el.textContent = on ? (onText || 'ON') : (offText || 'OFF');
 }
 
-function updateMachineStatus(ms, cs) {
+function updateMachineStatus(ms, cs, tooHot) {
     const el = $('machineStatus'); if (!el) return;
     if (ms === 'ERROR') { el.textContent = 'ERROR'; el.className = 'status-display emergency'; }
     else if (ms === 'COFFEE') {
@@ -845,10 +881,11 @@ function updateMachineStatus(ms, cs) {
     else if (ms === 'STEAM') { el.textContent = 'Steam'; el.className = 'status-display steam'; }
     else if (ms === 'HOT_WATER') { el.textContent = 'Hot Water'; el.className = 'status-display hotwater'; }
     else if (ms === 'ECO') { el.textContent = 'Eco'; el.className = 'status-display eco'; }
+    else if (tooHot) { el.textContent = 'Too Hot'; el.className = 'status-display heating'; }
     else { el.textContent = 'Heating Up'; el.className = 'status-display heating'; }
 }
 
-function updateBrewStatus(ms, cs, err) {
+function updateBrewStatus(ms, cs, err, tooHot, brewReadyTemp) {
     const label = $('brewStatusLabel'); if (!label) return;
     const labels = {
         'PREINFUSE': 'Pump on — building pressure through puck',
@@ -865,6 +902,7 @@ function updateBrewStatus(ms, cs, err) {
     else if (ms === 'ERROR') label.textContent = err
         ? '⚠ ' + err + ' — turn both switches off to acknowledge'
         : 'Safety lockout — turn both switches off to acknowledge';
+    else if (tooHot) label.textContent = 'Too hot to brew — waiting for block to cool below ' + brewReadyTemp.toFixed(0) + '°C';
     else label.textContent = 'Idle — activate coffee switch to start a brew';
 }
 
@@ -913,10 +951,18 @@ R"JS(
 )JS"
 #endif
 R"JS(
-        updateMachineStatus(d.machineState, d.coffeeSubstate);
-        updateBrewStatus(d.machineState, d.coffeeSubstate, d.errorReason);
+        const tooHot = d.machineState === 'IDLE' && d.swCoffee && d.currentTemp > d.brewReadyTemp;
+        updateMachineStatus(d.machineState, d.coffeeSubstate, tooHot);
+        updateBrewStatus(d.machineState, d.coffeeSubstate, d.errorReason, tooHot, d.brewReadyTemp);
         updateBars(d.dutyCycle, d.heaterMode);
         updateDiag(d);
+)JS"
+#if SIMULATION_MODE
+R"JS(
+        updateSimButtons(d.swCoffee, d.swSteam);
+)JS"
+#endif
+R"JS(
         pushChart(d.currentTemp, d.setTemp);
         const b = $('statusBadge'); b.textContent = 'Connected'; b.classList.add('connected');
         idle = (d.machineState === 'IDLE');
@@ -1006,6 +1052,7 @@ static void handleState() {
     j += ",\"coffeeSubstate\":\""  + String(substateEnumText(s.coffeeSubstate)) + "\"";
     j += ",\"errorReason\":\""     + String(errorReasonText(s.errorReason)) + "\"";
     j += ",\"heaterMode\":\""       + String(heaterModeText(s.heaterMode)) + "\"";
+    j += ",\"brewReadyTemp\":"      + String(BREW_READY_TEMP, 1);
     j += "}";
     server.send(200, "application/json", j);
 }
@@ -1100,6 +1147,22 @@ static void handlePostWifi() {
     server.send(200, "text/plain", "saved - takes effect on next restart");
 }
 
+#if SIMULATION_MODE
+// Fake steam/coffee switches - no physical switches wired in this build.
+// Sets state directly; Switches.cpp's real read is a no-op under
+// SIMULATION_MODE, so this is the sole writer of switchSteam/switchCoffee.
+static void handlePostSim() {
+    String b = server.arg("plain");
+    bool coffee = jgetb(b, "coffee", false);
+    bool steam  = jgetb(b, "steam", false);
+    STATE_LOCK();
+    state.switchCoffee = coffee;
+    state.switchSteam  = steam;
+    STATE_UNLOCK();
+    server.send(200, "text/plain", "ok");
+}
+#endif
+
 // =====================================================================
 // WiFi + task
 // =====================================================================
@@ -1140,6 +1203,9 @@ static void setupWeb() {
     server.on("/api/preset",  HTTP_POST, handlePostPreset);
     server.on("/api/reset",   HTTP_POST, handlePostReset);
     server.on("/api/wifi",    HTTP_POST, handlePostWifi);
+#if SIMULATION_MODE
+    server.on("/api/sim",     HTTP_POST, handlePostSim);
+#endif
     server.begin();
 }
 

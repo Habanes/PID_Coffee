@@ -6,6 +6,8 @@
 // No fault flag (over-range trips safePressureMax on its own).
 // Only called from ControlTask.cpp when HAS_PRESSURE_SENSOR (Config.h) is 1 -
 // on no-sensor builds these two functions are simply never invoked.
+// Under SIMULATION_MODE, the real ADC read is replaced by a constant
+// (SIM_PRESSURE_BAR) - see Pressure.cpp.
 // See ../Processes.txt (3).
 
 void setupPressure();   // call once in ControlTask init

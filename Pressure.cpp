@@ -2,6 +2,19 @@
 #include "State.h"
 #include "Config.h"
 
+#if SIMULATION_MODE
+
+void setupPressure() {}
+
+void readPressure() {
+    STATE_LOCK();
+    state.currentPressure = SIM_PRESSURE_BAR;
+    state.pressureVoltage = 0.0f;   // no real ADC in simulation
+    STATE_UNLOCK();
+}
+
+#else
+
 void setupPressure() {
     analogSetPinAttenuation(PIN_PRESSURE, ADC_11db);   // full 0-3.3V range
 }
@@ -27,3 +40,5 @@ void readPressure() {
     state.pressureVoltage = vGpio;   // raw GPIO voltage, diagnostic
     STATE_UNLOCK();
 }
+
+#endif // SIMULATION_MODE

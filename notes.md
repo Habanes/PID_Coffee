@@ -471,6 +471,60 @@ rediscovery step as today's existing AP/STA fallback switch already
 requires). Worth a future look, not required for this feature to be
 useful.
 
+### Simulation mode (not originally in this list - requested + built 2026-07-17, IMPLEMENTED 2026-07-17)
+Bench-test a bare board with nothing wired up: no heater/pump/valve relay, no
+temp/pressure sensor, no physical steam/coffee switches - only rotary
+encoder, button, and display assumed real. No grill session on this one, it
+was specified in enough detail to just build directly ("toggle switches,
+eyeball the numbers").
+
+**Toggle**: new compile-time `SIMULATION_MODE` in `Config.h` (default `1`
+for now, matches how the board is currently being bench-tested without
+peripherals - flip to `0` for a real-hardware build), same pattern as
+`HAS_PRESSURE_SENSOR`. Orthogonal to it: if `HAS_PRESSURE_SENSOR=0`,
+pressure stays 0 even in simulation; if `1` (default), simulation drives it
+to a constant instead of reading the ADC.
+
+**Temperature** (`Temperature.cpp`): under the flag, `readTemperature()`
+skips the real TSIC read and instead integrates a simple differential model
+every 100ms cycle: `dT = (heaterOnFraction * SIM_HEATER_GAIN_C_PER_S) -
+SIM_STATIC_LOSS_C_PER_S - (pumpOn ? SIM_PUMP_LOSS_C_PER_S : 0)`, floored at
+`SIM_AMBIENT_TEMP` so it can't run away negative. `heaterOnFraction` is 1.0
+for `HEATER_FULL_ON`, `duty/SSR_WINDOW_MS` for `HEATER_PID`, 0 for
+`HEATER_OFF` - read from the PREVIOUS cycle's `state.heaterMode`/
+`heatingPidOutput`/`pumpState` (Temperature runs before the brew SM each
+cycle, so this is always one 100ms-old read; irrelevant for a toy model).
+All four constants (`SIM_START_TEMP`, `SIM_AMBIENT_TEMP`,
+`SIM_HEATER_GAIN_C_PER_S`, `SIM_STATIC_LOSS_C_PER_S`,
+`SIM_PUMP_LOSS_C_PER_S`) are eyeballed, not measured, per the ask.
+
+**Pressure** (`Pressure.cpp`): under the flag, `readPressure()` skips the
+ADC read and just publishes a constant `SIM_PRESSURE_BAR` (5.0).
+
+**Switches** (`Switches.cpp`): under the flag, `setupSwitches()`/
+`readSwitches()` become no-ops entirely - no ADC ladder read. Instead,
+`switchSteam`/`switchCoffee` are written directly by a new `POST /api/sim`
+handler in `Web.cpp`, driven by two toggle buttons in a new "Simulation" GUI
+card. Still exactly one writer per field at a time (the codebase's existing
+single-writer discipline) - just Web instead of Switches for this build.
+
+**Heater/pump/valve outputs**: deliberately untouched. `digitalWrite()` to
+an unwired relay pin is harmless, so there was nothing to stub on the output
+side - only the three sensor/input processes needed replacing.
+
+**GUI**: new "Simulation" card (gated behind `#if SIMULATION_MODE`, same
+raw-string-split technique as the pressure-optional and WiFi features) with
+two toggle buttons, reusing the existing `.btn-primary.active` amber-gradient
+style (already established for the active-preset button) rather than
+inventing new CSS. Buttons are NOT in the `cfg` lock group - must stay
+clickable in every machine state (e.g. toggling the coffee switch off to end
+a simulated brew), same reasoning as the WiFi card. `toggleSimSwitch()`
+sends the full `{coffee, steam}` pair on every click (read from the buttons'
+own current `.active` state) so the handler never needs to guess a default
+for the field left unchanged; `updateSimButtons()` re-syncs both buttons'
+visual state from `/api/state`'s existing `swCoffee`/`swSteam` fields on
+every poll cycle - no separate client-side state tracking needed.
+
 ### Later / not now
 - Update over the air (OTA)
 - Recordings: record a shot (curve, values) and store it for later review
@@ -498,9 +552,8 @@ Two independent contributors identified during the 2026-07-16 review, see
 ## 2026-07-16 code review - findings and decisions
 
 Full-codebase read-through + grill session. Each item below is a decision
-already made. Status as of 2026-07-17: findings #1, #2, #3, #7, #8, #9 fixed;
-#4 is a comment-only decision (also done); #5 and #6 remain deferred; #10
-remains open (design finalized, not implemented).
+already made. Status as of 2026-07-18: findings #1, #2, #3, #7, #8, #9, #10
+fixed; #4 is a comment-only decision (also done); #5 and #6 remain deferred.
 
 ### 1. FIXED 2026-07-17 - ERROR-clear check uses the wrong temperature limit
 `BrewStateMachine.cpp` line ~147:
@@ -631,7 +684,7 @@ conflate when tuning and grepping for "EMA". Decided: add a clarifying
 comment rather than rename - both are already correctly scoped to
 different Config.h sections, this is cosmetic only.
 
-### 10. FIX - new feature: "too hot to brew" indicator
+### 10. FIXED 2026-07-18 - new feature: "too hot to brew" indicator
 When `machineState == IDLE && switchCoffee == true && currentTemperature >
 BREW_READY_TEMP`, the coffee switch is being silently ignored by the
 BREW_READY_TEMP gate with zero feedback. Decided to add explicit feedback,

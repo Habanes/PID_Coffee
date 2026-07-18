@@ -1,6 +1,44 @@
 #include "Temperature.h"
 #include "State.h"
 #include "Config.h"
+
+#if SIMULATION_MODE
+// ---------------------------------------------------------------------
+// Simulated block: simple differential model, integrated once per control
+// cycle. Reads the PREVIOUS cycle's heaterMode/heatingPidOutput/pumpState
+// (Temperature runs before the brew SM/PID each cycle) - one 100ms-stale
+// read is irrelevant for a toy model.
+// ---------------------------------------------------------------------
+static float simTemp = SIM_START_TEMP;
+
+void setupTemperature() {
+    simTemp = SIM_START_TEMP;
+}
+
+void readTemperature() {
+    STATE_LOCK();
+    HeaterMode hm     = state.heaterMode;
+    double     duty   = state.heatingPidOutput;
+    bool       pumpOn = state.pumpState;
+    STATE_UNLOCK();
+
+    float heaterOnFraction = 0.0f;
+    if (hm == HEATER_FULL_ON) heaterOnFraction = 1.0f;
+    else if (hm == HEATER_PID) heaterOnFraction = (float)(duty / (double)SSR_WINDOW_MS);
+
+    float dTdt = heaterOnFraction * SIM_HEATER_GAIN_C_PER_S
+               - SIM_STATIC_LOSS_C_PER_S
+               - (pumpOn ? SIM_PUMP_LOSS_C_PER_S : 0.0f);
+    simTemp += dTdt * (TASK_CONTROL_CYCLE_MS / 1000.0f);
+    if (simTemp < SIM_AMBIENT_TEMP) simTemp = SIM_AMBIENT_TEMP;
+
+    STATE_LOCK();
+    state.currentTemperature     = simTemp;
+    state.temperatureSensorError = false;
+    STATE_UNLOCK();
+}
+
+#else
 #include <TSIC.h>
 
 // External VCC -> NO_VCC_PIN; TSIC 30x family on the signal pin.
@@ -34,3 +72,5 @@ void readTemperature() {
     state.temperatureSensorError = fault;
     STATE_UNLOCK();
 }
+
+#endif // SIMULATION_MODE

@@ -157,6 +157,24 @@ Control loop (Core 1, every 100 ms, IN THIS ORDER so the PID sees a fresh target
                   which degrades preinfuse to a pure preinfuseMaxMs timeout
                   automatically (its condition is `pressure >= target ||
                   timeout` - the pressure side just never fires).
+
+SIMULATION_MODE=1 (Config.h, default): bench-test a bare board with nothing
+wired (no heater/pump/valve relay, no temp/pressure sensor, no physical
+steam/coffee switches) - rotary encoder, button, and display are assumed
+real. Replaces processes 1-3's real reads:
+  - Temperature: no TSIC read - instead integrates a toy differential model
+    each cycle (SIM_HEATER_GAIN/STATIC_LOSS/PUMP_LOSS_C_PER_S, all Config.h,
+    eyeballed not measured) off the PREVIOUS cycle's heaterMode/duty/pumpState
+    (Temperature runs before the brew SM, so this is always one 100ms-old
+    read - irrelevant for a toy model).
+  - Pressure: constant SIM_PRESSURE_BAR, no ADC read.
+  - Switches: no ADC read at all - switchSteam/switchCoffee are instead
+    written directly by Web.cpp's POST /api/sim handler (two toggle buttons
+    in a "Simulation" GUI card standing in for the unwired physical
+    switches). Still exactly one writer per field, just Web instead of
+    Switches for this build.
+Heater/pump/valve GPIO writes are untouched either way - driving unwired
+pins is harmless, so there is nothing to stub on the output side.
  (4) Brew SM      reads switches, temp, pressure,  -> machineState, coffeeSubstate,
                   fault, limits, active preset        currentTargetTemperature, heaterMode,
                                                       pumpState, valveState (+GPIO),
@@ -287,9 +305,20 @@ the PID (bang-bang FULL_ON/OFF), so its output is simply ignored there.
   While not IDLE the display auto-shows: COFFEE -> elapsed shot seconds,
   STEAM -> temperature (dash-prefixed), HOT_WATER -> temperature (H-prefixed,
   same glyph reused for the "too hot to brew" indicator), ECO -> static "ECO"
-  (not blinking - it's an expected background state), ERROR -> blinking "Err".
+  (not blinking - it's an expected background state), ERROR -> scrolling
+  short word identifying the fault (HIGH/PRESS/SEnSOr - no blink phase).
   In ECO, any encoder movement or button edge requests a wake back to IDLE -
   no view cycling, no settings edits happen while in ECO.
+  In IDLE, if the coffee switch is active but currentTemperature exceeds
+  BREW_READY_TEMP (the brew-readiness gate silently refusing to start),
+  the selected menu view is overridden with a blinking "HOt " - same
+  override precedent as STEAM/HOT_WATER/ERROR/ECO. Reverts to the normal
+  menu view the instant the switch releases or the block cools enough to
+  actually start brewing. The web GUI mirrors this: the status badge shows
+  "Too Hot" (existing amber "heating" style, no new CSS - a normal wait
+  state, not an error) and the status line reads "Too hot to brew -
+  waiting for block to cool below {BREW_READY_TEMP} degC" (BREW_READY_TEMP
+  exposed via /api/state as brewReadyTemp).
 
 8.2 BUZZER (non-blocking, mute-able)
     encoder step      short tick
@@ -313,11 +342,13 @@ the PID (bang-bang FULL_ON/OFF), so its output is simply ignored there.
         POST /api/wifi      save new station SSID/password (NOT IDLE-gated -
                              persists to NVS only, no live reconnect/reboot;
                              takes effect on the next natural restart)
+        POST /api/sim       SIMULATION_MODE only - set fake switchCoffee/
+                             switchSteam (NOT IDLE-gated; see section 5)
   The page is read-only (banner + disabled controls, class "cfg") whenever the
   machine is not IDLE; the server also rejects writes outside IDLE. The WiFi
-  card is deliberately NOT in the "cfg" lock group - editable regardless of
-  machine state, since saving credentials doesn't touch anything live. No
-  steam-PID row and no switch override (per design).
+  and Simulation cards are deliberately NOT in the "cfg" lock group - editable
+  regardless of machine state, since neither touches anything live. No
+  steam-PID row; no switch override in a real (non-simulation) build.
 
   WiFi: station mode using NVS-stored credentials ("wifi" namespace, keys
   "ssid"/"pass") if the user has ever saved one via the WiFi card, else the

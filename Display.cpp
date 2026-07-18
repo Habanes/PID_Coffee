@@ -165,6 +165,18 @@ static void renderEco() {
     sevseg.setSegments(s);
 }
 
+// Blinking "HOT" - coffee switch active but block too hot to start a brew.
+// Reuses renderSetCoffee's on/off blink-timer pattern.
+static void renderHot() {
+    static uint32_t last = 0; static bool on = true;
+    if (millis() - last >= DISPLAY_BLINK_CYCLE_MS) { on = !on; last = millis(); }
+
+    byte s[4];
+    if (on) { s[0] = CHAR_H; s[1] = digitSeg[0]; s[2] = CHAR_t; s[3] = CHAR_BLANK; }
+    else    { s[0] = s[1] = s[2] = s[3] = CHAR_BLANK; }
+    sevseg.setSegments(s);
+}
+
 static void renderIpScroll() {
     static uint32_t last = 0;
     static int pos = 0;
@@ -208,6 +220,13 @@ void refreshDisplay() {
             renderErrorScroll(s.errorReason);
             return;
         default: break;   // IDLE -> menu views below
+    }
+
+    // IDLE: coffee switch pressed but block too hot to start a brew - override
+    // whatever menu view was selected, same precedent as STEAM/ERROR/HOT_WATER.
+    if (s.switchCoffee && s.currentTemperature > BREW_READY_TEMP) {
+        renderHot();
+        return;
     }
 
     // IDLE: show the selected view.

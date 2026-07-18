@@ -2,6 +2,18 @@
 #include "State.h"
 #include "Config.h"
 
+#if SIMULATION_MODE
+// No physical switches wired - switchSteam/switchCoffee are instead set
+// directly by Web.cpp's /api/sim handler (fake toggle buttons in the GUI).
+// setupSwitches()/readSwitches() become no-ops; Web becomes the sole writer
+// of switchSteam/switchCoffee for this build (still exactly one writer,
+// just a different one than in a real build).
+
+void setupSwitches() {}
+void readSwitches() {}
+
+#else
+
 // Voltage bands (ascending). Higher voltage = fewer optos active.
 enum Band { BAND_BOTH, BAND_STEAM, BAND_COFFEE, BAND_NEITHER };
 
@@ -47,3 +59,5 @@ void readSwitches() {
     state.switchCoffee  = coffee;
     STATE_UNLOCK();
 }
+
+#endif // SIMULATION_MODE

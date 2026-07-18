@@ -283,4 +283,26 @@
 //   steamTempMax  >= steamTargetTemp  + ~10
 //   shotTimeMs    >= brewMaxTimeMs
 
+// =====================================================================
+// 12. SIMULATION MODE (bench-testing a board with nothing wired up)
+// Replaces Temperature/Pressure/Switches with a toy model + web-driven fake
+// switches, so a bare board (no heater/pump/valve relay, no temp/pressure
+// sensor, no physical steam/coffee switches) can still be exercised
+// end-to-end - rotary encoder, button, and display are assumed real/wired.
+// Heater/pump/valve GPIO writes are left completely untouched - driving
+// unwired pins is harmless, nothing needs stubbing on the output side.
+// Orthogonal to HAS_PRESSURE_SENSOR: if that's 0, pressure stays 0 even in
+// simulation (simulating a no-pressure-sensor variant); if 1 (default),
+// simulation drives it to a constant instead of reading the ADC.
+// =====================================================================
+
+#define SIMULATION_MODE          true
+
+#define SIM_START_TEMP           20.0f   // room temp at boot
+#define SIM_AMBIENT_TEMP         20.0f   // floor - block can't cool below this
+#define SIM_HEATER_GAIN_C_PER_S  1.0f    // block heating rate at 100% duty (eyeballed)
+#define SIM_STATIC_LOSS_C_PER_S  0.1f   // passive loss to environment (eyeballed)
+#define SIM_PUMP_LOSS_C_PER_S    1.1f   // extra loss while pump runs (eyeballed)
+#define SIM_PRESSURE_BAR         5.0f    // constant fake pressure reading
+
 #endif // CONFIG_H
