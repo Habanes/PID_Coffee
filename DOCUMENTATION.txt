@@ -124,11 +124,13 @@ Boot (CoffeePID.ino setup): initState -> initSettings (load NVS) -> buzzerInit
 
   Validation: every write path runs sanitizeLocked() which clamps each field to
   its *_MIN/_MAX range AND enforces coherence:
-    coffeeTargetTemp <= coffeeTempMax - 10 ;  steamTargetTemp <= steamTempMax-10
+    coffeeTargetTemp <= coffeeTempMax ;  steamTargetTemp <= steamTempMax
+    (the target's only ceiling IS the corresponding safety max - no separate
+    fixed *_TARGET_TEMP_MAX constant, no extra headroom margin subtracted)
     shotMs >= brewMaxMs
 
 4.3 KEY CONSTANTS / DEFAULTS  (Config.h)
-  coffeeTargetTemp  93   (80-100)    steamTargetTemp   130  (115-135)
+  coffeeTargetTemp  93   (80-coffeeTempMax)   steamTargetTemp   130  (115-steamTempMax)
   coffeeTempMax     120               steamTempMax      145  (130-149)
   safePressureMax   14   (1-16)      ecoTargetTemp     60   (30-80)
   ecoTimeoutMs      300000 (60000-3600000)  [5 min, 1-60 min]

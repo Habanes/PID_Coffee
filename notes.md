@@ -552,8 +552,8 @@ Two independent contributors identified during the 2026-07-16 review, see
 ## 2026-07-16 code review - findings and decisions
 
 Full-codebase read-through + grill session. Each item below is a decision
-already made. Status as of 2026-07-18: findings #1, #2, #3, #7, #8, #9, #10
-fixed; #4 is a comment-only decision (also done); #5 and #6 remain deferred.
+already made. Status as of 2026-07-19: findings #1, #2, #3, #5, #7, #8, #9,
+#10 fixed; #4 is a comment-only decision (also done); #6 remains deferred.
 
 ### 1. FIXED 2026-07-17 - ERROR-clear check uses the wrong temperature limit
 `BrewStateMachine.cpp` line ~147:
@@ -619,16 +619,32 @@ correctly. Instead: add a one-line comment on each mutator in `Settings.h`
 noting "caller must ensure machineState == IDLE before calling." Not yet
 done.
 
-### 5. DEFERRED - coherence clamp silently overrides preset targets
-`Settings.cpp`'s `sanitizeLocked()` forces e.g. `coffeeTargetTemp` down
-whenever it would exceed `coffeeTempMax - 10`, with no indication to the
-user that anything besides the field they touched changed. Real UX gap,
-not a safety/correctness bug (resulting values are always safe). Deferred
-to be handled alongside the eco-mode/preset GUI rework already planned
-above, since that work touches the same settings UI anyway. Candidate
-fixes discussed: (a) web GUI diff-checks the POST response and shows a
-warning if a preset target got adjusted, or (b) reject the write instead of
-silently clamping. Neither implemented.
+### 5. FIXED 2026-07-19 - coherence clamp silently overrides preset targets
+`Settings.cpp`'s `sanitizeLocked()` used to force e.g. `coffeeTargetTemp`
+down whenever it would exceed `coffeeTempMax - 10` - a hardcoded "-10"
+magic-constant headroom, on top of `coffeeTargetTemp` ALSO having its own
+separate fixed ceiling (`COFFEE_TARGET_TEMP_MAX = 100` in `Config.h`,
+completely disconnected from `coffeeTempMax`). Net effect discovered while
+debugging: raising `coffeeTempMax` to 120 in the GUI still silently capped
+the achievable target at 100, with zero feedback that anything besides the
+touched field was being overridden.
+
+Decided fix (explicitly requested - "delete it, this is a magic constant"):
+removed both the `-10.0f` headroom subtraction AND the redundant
+`COFFEE_TARGET_TEMP_MAX`/`STEAM_TARGET_TEMP_MAX` constants entirely.
+`coffeeTargetTemp`/`steamTargetTemp` are now clamped directly against
+`settings.coffeeTempMax`/`settings.steamTempMax` in `sanitizeLocked()` - one
+ceiling per target, not two overlapping ones. `COFFEE_TARGET_TEMP_MIN`/
+`STEAM_TARGET_TEMP_MIN` kept as-is (genuine independent floors, not
+duplicates). `Config.h` comment block and `DOCUMENTATION.txt` (section 4.2/
+4.3) updated to match.
+
+Trade-off accepted knowingly: this removes the overshoot-absorbing margin
+that used to exist between the target and the error trip (e.g. so the
+`BREW_MAX` full-heat boost phase's normal overshoot doesn't trip a false
+ERROR). If that turns out to be a real problem in practice, the fix is
+raising `coffeeTempMax`/`steamTempMax` themselves higher (there's now only
+one number to reason about), not reintroducing a second hidden constant.
 
 ### 6. DEFERRED - every encoder tick does a full NVS flash write
 `settingsAdjustCoffeeTarget`, `settingsAdjustShotTime`, and

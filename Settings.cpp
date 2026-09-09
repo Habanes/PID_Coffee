@@ -40,8 +40,8 @@ static void sanitizeLocked() {
 
     for (uint8_t i = 0; i < NUM_PRESETS; i++) {
         Preset& p = settings.preset[i];
-        p.coffeeTargetTemp   = clampf(p.coffeeTargetTemp,   COFFEE_TARGET_TEMP_MIN, COFFEE_TARGET_TEMP_MAX);
-        p.steamTargetTemp    = clampf(p.steamTargetTemp,    STEAM_TARGET_TEMP_MIN,  STEAM_TARGET_TEMP_MAX);
+        p.coffeeTargetTemp   = clampf(p.coffeeTargetTemp,   COFFEE_TARGET_TEMP_MIN, settings.coffeeTempMax);
+        p.steamTargetTemp    = clampf(p.steamTargetTemp,    STEAM_TARGET_TEMP_MIN,  settings.steamTempMax);
         p.preinfuseMaxMs     = clampu(p.preinfuseMaxMs,     BREW_TIME_MIN_MS,       BREW_TIME_MAX_MS);
         p.bloomMs            = clampu(p.bloomMs,            BREW_TIME_MIN_MS,       BREW_TIME_MAX_MS);
         p.preheatMs          = clampu(p.preheatMs,          BREW_TIME_MIN_MS,       BREW_TIME_MAX_MS);
@@ -49,11 +49,9 @@ static void sanitizeLocked() {
         p.shotMs             = clampu(p.shotMs,             SHOT_TIME_MIN_MS,       SHOT_TIME_MAX_MS);
         p.preinfuseTargetBar = clampf(p.preinfuseTargetBar, PREINFUSE_TARGET_BAR_MIN, PREINFUSE_TARGET_BAR_MAX);
 
-        // Coherence: limits must sit above targets; shot must cover the boost.
-        if (p.coffeeTargetTemp > settings.coffeeTempMax - 10.0f)
-            p.coffeeTargetTemp = settings.coffeeTempMax - 10.0f;
-        if (p.steamTargetTemp > settings.steamTempMax - 10.0f)
-            p.steamTargetTemp = settings.steamTempMax - 10.0f;
+        // Coherence: shot must cover the boost. (Target-vs-max headroom is no
+        // longer force-clamped here - coffeeTempMax/steamTempMax themselves
+        // are now the sole ceiling on the corresponding target, see above.)
         if (p.shotMs < p.brewMaxMs) p.shotMs = p.brewMaxMs;
     }
 }

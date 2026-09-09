@@ -255,12 +255,14 @@
 #define ECO_TIMEOUT_MS_MAX      3600000UL  // 60 minutes
 
 // ---- Per-preset: targets ----
+// Upper bound is NOT a separate constant here - each target is clamped
+// against the corresponding coffeeTempMax/steamTempMax safety setting
+// directly in sanitizeLocked() (Settings.cpp), so there's exactly one
+// ceiling per target, not two overlapping ones.
 #define DEFAULT_COFFEE_TARGET_TEMP 93.0f
 #define COFFEE_TARGET_TEMP_MIN  80.0f
-#define COFFEE_TARGET_TEMP_MAX  100.0f
 #define DEFAULT_STEAM_TARGET_TEMP 130.0f
 #define STEAM_TARGET_TEMP_MIN   115.0f
-#define STEAM_TARGET_TEMP_MAX   135.0f
 
 // ---- Per-preset: brew timings (ms) ----
 #define DEFAULT_PREINFUSE_MAX_MS 3000
@@ -279,9 +281,9 @@
 #define PREINFUSE_TARGET_BAR_MAX 10.0f
 
 // Coherence (enforced in Settings validation, see ../Architecture.txt):
-//   coffeeTempMax >= coffeeTargetTemp + ~10
-//   steamTempMax  >= steamTargetTemp  + ~10
-//   shotTimeMs    >= brewMaxTimeMs
+//   coffeeTargetTemp <= coffeeTempMax (target's ceiling IS the safety max)
+//   steamTargetTemp  <= steamTempMax  (target's ceiling IS the safety max)
+//   shotTimeMs       >= brewMaxTimeMs
 
 // =====================================================================
 // 12. SIMULATION MODE (bench-testing a board with nothing wired up)
@@ -296,7 +298,7 @@
 // simulation drives it to a constant instead of reading the ADC.
 // =====================================================================
 
-#define SIMULATION_MODE          true
+#define SIMULATION_MODE          false
 
 #define SIM_START_TEMP           20.0f   // room temp at boot
 #define SIM_AMBIENT_TEMP         20.0f   // floor - block can't cool below this
