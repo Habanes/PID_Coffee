@@ -148,6 +148,12 @@ const char index_html[] PROGMEM = R"rawliteral(
                         <input type="number" id="brewDelayInput" step="1" value="10" min="0" max="60">
                     </div>
                 </div>
+                <div class="preset-row">
+                    <button class="btn-preset" id="brewPreset1" onclick="applyBrewPreset(1, this)">Preset 1: PID Only</button>
+                    <button class="btn-preset" id="brewPreset2" onclick="applyBrewPreset(2, this)">Preset 2: Preinfuse + Max</button>
+                    <button class="btn-preset" id="brewPreset3" onclick="applyBrewPreset(3, this)">Preset 3: Preinfuse + Preheat + Max</button>
+                </div>
+                <div class="brew-status-label">Preset mapping: 1 = no preinfuse/preheat/max, 2 = default preinfuse + max on, 3 = default preinfuse + preheat + max heat seconds.</div>
                 <div style="display: flex; gap: 10px;">
                     <button class="btn-brew" onclick="applyBrewSettings(this)" style="flex: 1;">Apply Brew Settings</button>
                     <button class="btn-reset" onclick="resetBrewSettings(this)" style="flex: 1;">Reset Brew Defaults</button>
@@ -361,6 +367,31 @@ header h1 { font-size: 2em; color: #667eea; }
 .btn-brew:active {
     transform: translateY(0);
     box-shadow: 0 2px 10px rgba(253, 124, 32, 0.3);
+}
+.preset-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
+}
+.btn-preset {
+    padding: 10px 14px;
+    border: 2px solid #d0d7f7;
+    border-radius: 10px;
+    background: #f8f9ff;
+    color: #44508d;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.btn-preset:hover {
+    border-color: #8fa2f0;
+    transform: translateY(-1px);
+}
+.btn-preset.active {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-color: #667eea;
+    color: white;
+    box-shadow: 0 4px 14px rgba(102, 126, 234, 0.35);
 }
 .btn-relay-override {
     padding: 15px 30px;
@@ -595,6 +626,33 @@ function applyBrewSettings(btn) {
         setTimeout(() => { btn.textContent = txt; btn.style.backgroundColor = ''; }, 2000);
     }).catch(e => { console.error('Brew update error:', e); alert('Failed to update brew settings'); });
 }
+function setActiveBrewPreset(presetId) {
+    [1,2,3].forEach(id => {
+        const el = document.getElementById('brewPreset' + id);
+        if (!el) return;
+        if (id === presetId) el.classList.add('active');
+        else el.classList.remove('active');
+    });
+}
+function applyBrewPreset(presetId, btn) {
+    fetch('/api/applyBrewPreset', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({preset: presetId})
+    }).then(r=>r.json()).then(d=>{
+        if (typeof d.delay !== 'undefined') {
+            document.getElementById('brewDelayInput').value = d.delay;
+        }
+        if (typeof d.preset !== 'undefined') {
+            setActiveBrewPreset(d.preset);
+        } else {
+            setActiveBrewPreset(presetId);
+        }
+
+        const txt = btn.textContent;
+        btn.textContent = 'Applied ✓';
+        setTimeout(() => { btn.textContent = txt; }, 1500);
+    }).catch(e => { console.error('Brew preset error:', e); alert('Failed to apply brew preset'); });
+}
 function resetBrewSettings(btn) {
     if (!confirm('Reset brew settings to factory defaults?')) return;
     fetch('/api/resetBrewSettings', {
@@ -605,6 +663,7 @@ function resetBrewSettings(btn) {
             document.getElementById('brewKiInput').value = d.ki;
             document.getElementById('brewKdInput').value = d.kd;
             document.getElementById('brewDelayInput').value = d.delay;
+            setActiveBrewPreset(d.preset || 1);
             const txt = btn.textContent;
             btn.textContent = 'Reset Complete \u2713';
             setTimeout(() => { btn.textContent = txt; }, 2000);
@@ -629,6 +688,7 @@ function init() {
         document.getElementById('brewKiInput').value = d.ki;
         document.getElementById('brewKdInput').value = d.kd;
         document.getElementById('brewDelayInput').value = d.delay;
+        setActiveBrewPreset(d.preset || 1);
     }).catch(e => console.error('Failed to load brew settings:', e));
     
     fetchRealData(); setInterval(fetchRealData, 1000);
@@ -912,13 +972,21 @@ void handleWebServer() {
                         else if (requestLine.indexOf("GET /api/getBrewSettings") >= 0) {
                             double bkp, bki, bkd;
                             int bdelay;
+                            int bpreinfuse, bpreheat, bmaxheat;
+                            int bpreset;
                             getBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            getBrewTimingConfig(bpreinfuse, bpreheat, bmaxheat);
+                            bpreset = getBrewTimingPreset();
                             
                             String json = "{";
                             json += "\"kp\":" + String(bkp, 1) + ",";
                             json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"delay\":" + String(bdelay);
+                            json += "\"delay\":" + String(bdelay) + ",";
+                            json += "\"preinfuse\":" + String(bpreinfuse) + ",";
+                            json += "\"preheat\":" + String(bpreheat) + ",";
+                            json += "\"maxHeat\":" + String(bmaxheat) + ",";
+                            json += "\"preset\":" + String(bpreset);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");
@@ -951,19 +1019,64 @@ void handleWebServer() {
                             Serial.printf("[WEB] Brew settings updated: Kp=%.1f, Ki=%.2f, Kd=%.1f, Delay=%ds\n",
                                          bkp, bki, bkd, bdelay);
                         }
+                        else if (requestLine.indexOf("POST /api/applyBrewPreset") >= 0) {
+                            int preset = 1;
+                            int presetIdx = body.indexOf("\"preset\":");
+
+                            if (presetIdx >= 0) {
+                                preset = body.substring(presetIdx + 9).toInt();
+                            }
+
+                            applyBrewTimingPreset(preset);
+
+                            double bkp, bki, bkd;
+                            int bdelay;
+                            int bpreinfuse, bpreheat, bmaxheat;
+                            int bpreset;
+                            getBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            getBrewTimingConfig(bpreinfuse, bpreheat, bmaxheat);
+                            bpreset = getBrewTimingPreset();
+
+                            String json = "{";
+                            json += "\"status\":\"ok\",";
+                            json += "\"kp\":" + String(bkp, 1) + ",";
+                            json += "\"ki\":" + String(bki, 2) + ",";
+                            json += "\"kd\":" + String(bkd, 1) + ",";
+                            json += "\"delay\":" + String(bdelay) + ",";
+                            json += "\"preinfuse\":" + String(bpreinfuse) + ",";
+                            json += "\"preheat\":" + String(bpreheat) + ",";
+                            json += "\"maxHeat\":" + String(bmaxheat) + ",";
+                            json += "\"preset\":" + String(bpreset);
+                            json += "}";
+
+                            client.println("HTTP/1.1 200 OK");
+                            client.println("Content-Type: application/json");
+                            client.println("Connection: close");
+                            client.println();
+                            client.println(json);
+                            Serial.printf("[WEB] Brew preset applied: %d\n", bpreset);
+                        }
                         else if (requestLine.indexOf("POST /api/resetBrewSettings") >= 0) {
                             resetBrewPIDToDefaults();
                             
                             double bkp, bki, bkd;
                             int bdelay;
+                            int bpreinfuse, bpreheat, bmaxheat;
+                            int bpreset;
                             getBrewPIDTunings(bkp, bki, bkd, bdelay);
+                            getBrewTimingConfig(bpreinfuse, bpreheat, bmaxheat);
+                            bpreset = getBrewTimingPreset();
                             
                             String json = "{";
                             json += "\"status\":\"ok\",";
                             json += "\"kp\":" + String(bkp, 1) + ",";
                             json += "\"ki\":" + String(bki, 2) + ",";
                             json += "\"kd\":" + String(bkd, 1) + ",";
-                            json += "\"delay\":" + String(bdelay);
+                            json += "\"delay\":" + String(bdelay) + ",";
+                            json += "\"preinfuse\":" + String(bpreinfuse) + ",";
+                            json += "\"preheat\":" + String(bpreheat) + ",";
+                            json += "\"maxHeat\":" + String(bmaxheat) + ",";
+                            json += "\"preset\":" + String(bpreset);
                             json += "}";
                             
                             client.println("HTTP/1.1 200 OK");

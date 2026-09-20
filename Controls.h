@@ -19,6 +19,9 @@
 #define DEFAULT_BREW_KI 0.55
 #define DEFAULT_BREW_KD 20.0
 #define DEFAULT_BREW_DELAY_SECONDS 10  // Seconds with heater OFF before brew PID takes over
+#define DEFAULT_PREHEAT_SECONDS 4       // Full heater ON phase after preinfusion
+#define DEFAULT_MAX_HEAT_SECONDS 6      // Additional full heater ON boost phase
+#define DEFAULT_BREW_TIMING_PRESET 2    // 1=PID only, 2=Preinfuse+Max, 3=Preinfuse+Preheat+Max
 
 void setupControls();
 void updatePID();
@@ -41,6 +44,9 @@ bool isBrewModeActive();
 bool isBrewDelayPhase();
 void setBrewPIDTunings(double kp, double ki, double kd, int delaySeconds);
 void getBrewPIDTunings(double &kp, double &ki, double &kd, int &delaySeconds);
+void getBrewTimingConfig(int &preinfuseSeconds, int &preheatSeconds, int &maxHeatSeconds);
+void applyBrewTimingPreset(int presetId);
+int getBrewTimingPreset();
 void resetBrewPIDToDefaults();
 void saveBrewSettingsToStorage();
 

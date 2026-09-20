@@ -24,6 +24,9 @@ static double BrewKp = DEFAULT_BREW_KP;
 static double BrewKi = DEFAULT_BREW_KI;
 static double BrewKd = DEFAULT_BREW_KD;
 static int brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+static int preheatSeconds = 0;
+static int maxHeatSeconds = DEFAULT_MAX_HEAT_SECONDS;
+static int brewTimingPreset = DEFAULT_BREW_TIMING_PRESET;
 
 // Integral accumulator clamp (IMax) - limits integral windup without restricting P+D
 static double IMax = DEFAULT_IMAX;
@@ -32,6 +35,47 @@ static double IMax = DEFAULT_IMAX;
 static bool brewModeActive = false;   // Mirrors state.brewMode but transitions safely
 static bool brewDelayPhase = false;   // True during the initial heater-OFF delay
 static unsigned long brewDelayStartTime = 0;
+static bool brewPreheatPhase = false; // True during full-heater preheat phase
+static bool brewMaxHeatPhase = false; // True during full-heater max boost phase
+
+static void enterBrewPidPhase() {
+    brewDelayPhase = false;
+    brewPreheatPhase = false;
+    brewMaxHeatPhase = false;
+    myPID.SetMode(MANUAL);
+    myPID.SetMode(AUTOMATIC);
+    myPID.SetTunings(BrewKp, BrewKi, BrewKd);
+    Serial.println("[CONTROLS] Brew timing sequence complete - switched to brew PID");
+}
+
+static void startBrewTimingSequence() {
+    brewDelayPhase = false;
+    brewPreheatPhase = false;
+    brewMaxHeatPhase = false;
+
+    if (brewDelaySeconds > 0) {
+        brewDelayPhase = true;
+        brewDelayStartTime = millis();
+        Serial.printf("[CONTROLS] Brew preinfusion phase started (%ds, heater OFF)\n", brewDelaySeconds);
+        return;
+    }
+
+    if (preheatSeconds > 0) {
+        brewPreheatPhase = true;
+        brewDelayStartTime = millis();
+        Serial.printf("[CONTROLS] Brew preheat phase started (%ds, heater ON)\n", preheatSeconds);
+        return;
+    }
+
+    if (maxHeatSeconds > 0) {
+        brewMaxHeatPhase = true;
+        brewDelayStartTime = millis();
+        Serial.printf("[CONTROLS] Brew max-heat phase started (%ds, heater ON)\n", maxHeatSeconds);
+        return;
+    }
+
+    enterBrewPidPhase();
+}
 
 // PID Controller Instance
 // Parameters: Input, Output, Setpoint, Kp, Ki, Kd, Direction
@@ -198,34 +242,65 @@ void updatePID() {
 
     // --- BREW MODE TRANSITION LOGIC ---
     if (brewMode && !brewModeActive) {
-        // Brew mode just activated: start heater-OFF delay phase
+        // Brew mode just activated: run configured timing sequence before brew PID
         brewModeActive = true;
-        brewDelayPhase = true;
-        brewDelayStartTime = millis();
-        // Force heater off for bumpless entry: zero pidOutput before going AUTOMATIC
         myPID.SetMode(MANUAL);
         pidOutput = 0;
         myPID.SetMode(AUTOMATIC);
-        Serial.printf("[CONTROLS] Brew mode ON - heater-OFF delay started (%ds)\n", brewDelaySeconds);
+        startBrewTimingSequence();
+        Serial.println("[CONTROLS] Brew mode ON");
     } else if (!brewMode && brewModeActive) {
         // Brew mode deactivated: switch back to normal heating PID
         brewModeActive = false;
         brewDelayPhase = false;
+        brewPreheatPhase = false;
+        brewMaxHeatPhase = false;
         myPID.SetMode(MANUAL);
         myPID.SetMode(AUTOMATIC);
         myPID.SetTunings(Kp, Ki, Kd);
         Serial.println("[CONTROLS] Brew mode OFF - back to heating PID");
     }
 
-    // Check if delay phase has elapsed
+    // Handle timing phase transitions
     if (brewModeActive && brewDelayPhase) {
         if (millis() - brewDelayStartTime >= (unsigned long)brewDelaySeconds * 1000UL) {
             brewDelayPhase = false;
-            // Bumpless transfer into brew PID (pidOutput already 0 from delay phase)
-            myPID.SetMode(MANUAL);
-            myPID.SetMode(AUTOMATIC);
-            myPID.SetTunings(BrewKp, BrewKi, BrewKd);
-            Serial.println("[CONTROLS] Brew delay complete - switched to brew PID");
+
+            if (preheatSeconds > 0) {
+                brewPreheatPhase = true;
+                brewDelayStartTime = millis();
+                Serial.printf("[CONTROLS] Brew preheat phase started (%ds, heater ON)\n", preheatSeconds);
+            }
+            else if (maxHeatSeconds > 0) {
+                brewMaxHeatPhase = true;
+                brewDelayStartTime = millis();
+                Serial.printf("[CONTROLS] Brew max-heat phase started (%ds, heater ON)\n", maxHeatSeconds);
+            }
+            else {
+                enterBrewPidPhase();
+            }
+        }
+    }
+
+    if (brewModeActive && brewPreheatPhase) {
+        if (millis() - brewDelayStartTime >= (unsigned long)preheatSeconds * 1000UL) {
+            brewPreheatPhase = false;
+
+            if (maxHeatSeconds > 0) {
+                brewMaxHeatPhase = true;
+                brewDelayStartTime = millis();
+                Serial.printf("[CONTROLS] Brew max-heat phase started (%ds, heater ON)\n", maxHeatSeconds);
+            }
+            else {
+                enterBrewPidPhase();
+            }
+        }
+    }
+
+    if (brewModeActive && brewMaxHeatPhase) {
+        if (millis() - brewDelayStartTime >= (unsigned long)maxHeatSeconds * 1000UL) {
+            brewMaxHeatPhase = false;
+            enterBrewPidPhase();
         }
     }
 
@@ -243,6 +318,15 @@ void updatePID() {
                          elapsed, brewDelaySeconds, currentTemp);
             lastDelayDebug = millis();
         }
+        return;
+    }
+
+    if (brewModeActive && (brewPreheatPhase || brewMaxHeatPhase)) {
+        pidOutput = windowSize;
+        pidOutputISR = windowSize;
+        STATE_LOCK();
+        state.pidOutput = windowSize;
+        STATE_UNLOCK();
         return;
     }
 
@@ -350,7 +434,7 @@ bool isBrewModeActive() {
 }
 
 bool isBrewDelayPhase() {
-    return brewDelayPhase;
+    return brewDelayPhase || brewPreheatPhase || brewMaxHeatPhase;
 }
 
 void setBrewPIDTunings(double kp, double ki, double kd, int delaySeconds) {
@@ -374,11 +458,58 @@ void getBrewPIDTunings(double &kp, double &ki, double &kd, int &delaySeconds) {
     delaySeconds = brewDelaySeconds;
 }
 
+void getBrewTimingConfig(int &preinfuseOut, int &preheatOut, int &maxHeatOut) {
+    preinfuseOut = brewDelaySeconds;
+    preheatOut = preheatSeconds;
+    maxHeatOut = maxHeatSeconds;
+}
+
+void applyBrewTimingPreset(int presetId) {
+    if (presetId < 1 || presetId > 3) {
+        Serial.printf("[CONTROLS] Ignoring invalid brew preset: %d\n", presetId);
+        return;
+    }
+
+    brewTimingPreset = presetId;
+
+    switch (presetId) {
+        case 1:
+            brewDelaySeconds = 0;
+            preheatSeconds = 0;
+            maxHeatSeconds = 0;
+            break;
+        case 2:
+            brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+            preheatSeconds = 0;
+            maxHeatSeconds = DEFAULT_MAX_HEAT_SECONDS;
+            break;
+        case 3:
+            brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+            preheatSeconds = DEFAULT_PREHEAT_SECONDS;
+            maxHeatSeconds = DEFAULT_MAX_HEAT_SECONDS;
+            break;
+        default:
+            break;
+    }
+
+    saveBrewSettingsToStorage();
+
+    Serial.printf("[CONTROLS] Applied brew timing preset %d (preinfuse=%ds, preheat=%ds, maxHeat=%ds)\n",
+                  brewTimingPreset, brewDelaySeconds, preheatSeconds, maxHeatSeconds);
+}
+
+int getBrewTimingPreset() {
+    return brewTimingPreset;
+}
+
 void resetBrewPIDToDefaults() {
     BrewKp = DEFAULT_BREW_KP;
     BrewKi = DEFAULT_BREW_KI;
     BrewKd = DEFAULT_BREW_KD;
+    brewTimingPreset = DEFAULT_BREW_TIMING_PRESET;
     brewDelaySeconds = DEFAULT_BREW_DELAY_SECONDS;
+    preheatSeconds = 0;
+    maxHeatSeconds = DEFAULT_MAX_HEAT_SECONDS;
     if (brewModeActive && !brewDelayPhase) {
         myPID.SetTunings(BrewKp, BrewKi, BrewKd);
     }
@@ -392,6 +523,9 @@ void saveBrewSettingsToStorage() {
     preferences.putDouble("brewKi", BrewKi);
     preferences.putDouble("brewKd", BrewKd);
     preferences.putInt("brewDelay", brewDelaySeconds);
+    preferences.putInt("brewPreheat", preheatSeconds);
+    preferences.putInt("brewMaxHeat", maxHeatSeconds);
+    preferences.putInt("brewPreset", brewTimingPreset);
     preferences.end();
     Serial.println("[STORAGE] Brew settings saved to NVS");
 }
@@ -466,6 +600,12 @@ void loadPIDFromStorage() {
     BrewKi = preferences.getDouble("brewKi", DEFAULT_BREW_KI);
     BrewKd = preferences.getDouble("brewKd", DEFAULT_BREW_KD);
     brewDelaySeconds = preferences.getInt("brewDelay", DEFAULT_BREW_DELAY_SECONDS);
+    preheatSeconds = preferences.getInt("brewPreheat", 0);
+    maxHeatSeconds = preferences.getInt("brewMaxHeat", DEFAULT_MAX_HEAT_SECONDS);
+    brewTimingPreset = preferences.getInt("brewPreset", DEFAULT_BREW_TIMING_PRESET);
+    if (brewTimingPreset < 1 || brewTimingPreset > 3) {
+        brewTimingPreset = DEFAULT_BREW_TIMING_PRESET;
+    }
 
     // Load IMax (integral accumulator clamp)
     IMax = preferences.getDouble("iMax", DEFAULT_IMAX);
@@ -474,8 +614,8 @@ void loadPIDFromStorage() {
     
     Serial.println("[STORAGE] PID settings loaded from NVS:");
     Serial.printf("  Kp = %.1f, Ki = %.2f, Kd = %.1f, Target = %.1f\u00b0C, IMax = %.0f\n", Kp, Ki, Kd, state.setTemp, IMax);
-    Serial.printf("  Brew Kp = %.1f, Ki = %.2f, Kd = %.1f, Delay = %ds\n",
-                  BrewKp, BrewKi, BrewKd, brewDelaySeconds);
+    Serial.printf("  Brew Kp = %.1f, Ki = %.2f, Kd = %.1f, Preinfuse = %ds, Preheat = %ds, MaxHeat = %ds, Preset = %d\n",
+                  BrewKp, BrewKi, BrewKd, brewDelaySeconds, preheatSeconds, maxHeatSeconds, brewTimingPreset);
 }
 
 /**
