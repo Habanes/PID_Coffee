@@ -636,4 +636,27 @@ the PID (bang-bang FULL_ON/OFF), so its output is simply ignored there.
   - coffeeTempMax (120): raise if the PREHEAT/BREW_MAX bursts trip it.
   - SWITCH_LEVEL_1/2/3 ADC thresholds: verify against the real divider.
   - COFFEE_TEMP_STEP / encoder detents: confirm one comfortable step.
+  - If updating from a build that predates the single-blob preset storage
+    (section 4.2's "Storage note"), do one upload with Arduino IDE's
+    "Erase All Flash Before Sketch Upload" set to Enabled, then set it back
+    to Disabled - clears out orphaned NVS keys from the old per-slot scheme
+    that would otherwise sit there consuming space forever.
+
+================================================================================
+12. KNOWN ISSUES / OPEN ITEMS
+================================================================================
+  Switch debounce / ADC noise (Switches.cpp): the switch ladder is read via
+  a single unaveraged analogRead() per cycle, unlike Pressure.cpp, which
+  averages 4 samples specifically to tame ADC noise. If electrical noise
+  lands right at a switch-level transition, the debounce timer could keep
+  getting reset by single-cycle flicker and never commit, occasionally
+  preventing COFFEE/STEAM from starting. NOT YET FIXED - needs real scope/
+  logging data from the machine before changing debounce behavior blind.
+  Candidate fix: average multiple analogRead() samples in Switches.cpp,
+  mirroring Pressure.cpp's existing pattern.
+
+  PID retuning: heatingKp/Ki/Kd and brewKp/Ki/Kd are still their original
+  values - a deliberate retune (more aggressive, less accurate) has not
+  been done. Nothing in the codebase blocks it; it's manual bench-tuning
+  work, not a code change.
 ================================================================================

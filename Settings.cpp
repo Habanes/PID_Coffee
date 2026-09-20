@@ -120,13 +120,9 @@ static void readNvsLocked() {
     // - see the PRESET STORAGE note in Settings.h. getBytesLength()==0 covers
     // first boot; a length mismatch covers a firmware update that changed
     // sizeof(Preset) - both fall back to defaults rather than reading garbage.
-    size_t presetsLen = prefs.getBytesLength("presets");
-    Serial.printf("[NVS] read: presets blob = %u bytes (expect %u)\n",
-                  (unsigned)presetsLen, (unsigned)sizeof(settings.preset));
-    if (presetsLen == sizeof(settings.preset)) {
+    if (prefs.getBytesLength("presets") == sizeof(settings.preset)) {
         prefs.getBytes("presets", (void*)settings.preset, sizeof(settings.preset));
     } else {
-        Serial.println("[NVS] read: presets blob missing/mismatched, using defaults");
         defaultAllPresets();
     }
 
@@ -153,9 +149,7 @@ static void writeNvsLocked() {
     prefs.putUInt ("slpT", settings.sleepTimeoutMs);
     prefs.putUChar("actP", settings.activePresetIndex);
 
-    size_t wrote = prefs.putBytes("presets", (const void*)settings.preset, sizeof(settings.preset));
-    Serial.printf("[NVS] write: presets blob = %u/%u bytes (0 = failed)\n",
-                  (unsigned)wrote, (unsigned)sizeof(settings.preset));
+    prefs.putBytes("presets", (const void*)settings.preset, sizeof(settings.preset));
 
     prefs.end();
 }
@@ -173,10 +167,6 @@ void loadSettings() {
     readNvsLocked();
     sanitizeLocked();
     workingPreset = settings.preset[settings.activePresetIndex];
-    uint8_t activeCount = 0;
-    for (uint8_t i = 0; i < MAX_PRESETS; i++) if (settings.preset[i].active) activeCount++;
-    Serial.printf("[NVS] loadSettings done: activePresetIndex=%u, %u/%u presets active\n",
-                  settings.activePresetIndex, activeCount, (unsigned)MAX_PRESETS);
     SETTINGS_UNLOCK();
 }
 
@@ -379,7 +369,6 @@ void settingsSaveWorkingAsNewPreset(const char* name) {
     for (uint8_t i = 0; i < MAX_PRESETS; i++) {
         if (!settings.preset[i].active) { freeSlot = i; break; }
     }
-    Serial.printf("[PRESET] save-as-new '%s': freeSlot=%d\n", name, freeSlot);
     if (freeSlot >= 0) {
         Preset& p = settings.preset[freeSlot];
         p.active              = true;
