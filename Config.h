@@ -157,17 +157,21 @@
 
 // =====================================================================
 // 8. INPUT / ENCODER / MENU                        (process 7)
-// On-device menu is IDLE-only. Encoder edits the active preset's coffee
-// target temp and shot time, and selects the preset.
+// On-device menu is IDLE-only. Encoder edits the working preset's coffee
+// target temp and the 4 per-phase brew timings, and switches/saves presets.
+// See Settings.h for the working-copy / preset-rank model.
 // =====================================================================
 
 #define BTN_DEBOUNCE_MS         50
 #define BTN_LONG_PRESS_MS       500
-// SET_COFFEE has two encoder granularities, toggled by a long button press:
-//   WHOLE = single degrees, FINE = tenths. The selected digit blinks (see Display).
-#define COFFEE_TEMP_STEP_WHOLE  1.0f    // Encoder step editing whole degrees (C)
-#define COFFEE_TEMP_STEP_FINE   0.1f    // Encoder step editing tenths (C)
-#define SHOT_TIME_STEP_MS       1000    // Encoder step in TIMER view (1 s)
+#define DEFAULT_ENCODER_INVERTED false   // GUI-settable; physical default doesn't matter
+#define COFFEE_TEMP_STEP_WHOLE  1.0f    // Encoder step editing target temp (C) - whole degrees only
+// Encoder steps for the 4 per-phase brew timing views (1s each, same feel as
+// the old single shot-timer step they replace).
+#define PREINFUSE_STEP_MS       1000
+#define BLOOM_STEP_MS           1000
+#define PREHEAT_STEP_MS         1000
+#define BOOST_STEP_MS           1000
 
 
 // =====================================================================
@@ -216,7 +220,13 @@
 // validated against the *_MIN / *_MAX bounds, persisted to NVS.
 // =====================================================================
 
-#define NUM_PRESETS             3
+// Fixed-size slot pool, not a live count - presets are activated/deactivated
+// within it (see Settings.h). 20 is a generous ceiling for a single-user
+// machine, allocated once at compile time so NVS layout stays simple
+// (no dynamic allocation, no reordering of stored data - see UPDATE_PLAN.md
+// preset-rework notes for why display numbering doesn't need real reorder).
+#define MAX_PRESETS             20
+#define PRESET_NAME_MAX_LEN     15   // + 1 for the null terminator in storage
 #define NVS_NAMESPACE           "coffee-pid"
 
 // ---- Global: heating PID ----
@@ -254,6 +264,15 @@
 #define ECO_TIMEOUT_MS_MIN      60000UL    // 1 minute
 #define ECO_TIMEOUT_MS_MAX      3600000UL  // 60 minutes
 
+// ---- Global: sleep mode (heater fully OFF, deeper than eco) ----
+// Both timeouts measure continuous time since the machine last entered IDLE
+// (idleEntryMs in BrewStateMachine.cpp) - IDLE -(ecoTimeoutMs)-> ECO
+// -(sleepTimeoutMs)-> SLEEP, chained off the same clock. Coherence:
+// sleepTimeoutMs >= ecoTimeoutMs, enforced in sanitizeLocked().
+#define DEFAULT_SLEEP_TIMEOUT_MS 3600000UL  // 60 minutes
+#define SLEEP_TIMEOUT_MS_MIN     60000UL    // 1 minute
+#define SLEEP_TIMEOUT_MS_MAX     14400000UL // 4 hours
+
 // ---- Per-preset: targets ----
 // Upper bound is NOT a separate constant here - each target is clamped
 // against the corresponding coffeeTempMax/steamTempMax safety setting
@@ -269,7 +288,7 @@
 #define DEFAULT_BLOOM_MS        5000
 #define DEFAULT_PREHEAT_MS      2000
 #define DEFAULT_BREW_MAX_MS     8000
-#define DEFAULT_SHOT_MS         30000   // TOTAL brew time (continuous from start)
+#define DEFAULT_SHOT_MS         120000  // TOTAL brew time (continuous from start)
 #define BREW_TIME_MIN_MS        100
 #define BREW_TIME_MAX_MS        120000
 #define SHOT_TIME_MIN_MS        10000
@@ -298,7 +317,7 @@
 // simulation drives it to a constant instead of reading the ADC.
 // =====================================================================
 
-#define SIMULATION_MODE          false
+#define SIMULATION_MODE          true
 
 #define SIM_START_TEMP           20.0f   // room temp at boot
 #define SIM_AMBIENT_TEMP         20.0f   // floor - block can't cool below this

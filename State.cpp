@@ -25,11 +25,13 @@ void initState() {
     state.pumpState                = false;
     state.valveState               = false;
     state.brewTimerElapsedMs       = 0;
+    state.coffeePhaseElapsedMs     = 0;
     state.errorReason              = ERR_NONE;
 
     state.displayView              = VIEW_TEMP;
-    state.setEditDecimals          = false;
-    state.ecoWakeRequested         = false;
+    state.wakeRequested            = false;
+    state.presetSaveMode           = false;
+    state.presetSaveTargetRank     = 0;
 }
 
 SystemState stateSnapshot() {
@@ -46,6 +48,7 @@ const char* machineStateText(MachineState s) {
         case STATE_STEAM:     return "Steam";
         case STATE_HOT_WATER: return "Hot Water";
         case STATE_ECO:       return "Eco";
+        case STATE_SLEEP:     return "Sleep";
         case STATE_ERROR:     return "Error";
         default:              return "?";
     }

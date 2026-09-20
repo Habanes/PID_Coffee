@@ -348,6 +348,7 @@ header h1 { font-size: 2em; color: #b6926e; }
 .status-display.steam     { color: #e8e8e8; border-color: rgba(232, 232, 232, 0.35); background: rgba(232, 232, 232, 0.06); }
 .status-display.hotwater  { color: #a06bd4; border-color: rgba(160, 107, 212, 0.4);  background: rgba(160, 107, 212, 0.08); }
 .status-display.eco       { color: #6b8a9e; border-color: rgba(107, 138, 158, 0.35); background: rgba(107, 138, 158, 0.07); }
+.status-display.sleep     { color: #4a5568; border-color: rgba(74, 85, 104, 0.35);   background: rgba(74, 85, 104, 0.07); }
 .status-display.emergency { color: #b84040; border-color: rgba(184, 64, 64, 0.4);   background: rgba(184, 64, 64, 0.08); animation: pulse 0.8s infinite; }
 
 /* Buzzer / system rows */
@@ -453,13 +454,14 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
 
         <div class="lock-banner" id="lockBanner">Machine busy &mdash; settings are read-only until IDLE</div>
 
-        <!-- Preset selection -->
+        <!-- Preset selection - list is built dynamically, see loadPresets() -->
         <div class="card">
             <div class="card-title">Preset</div>
-            <div class="btn-row" style="margin-top:0">
-                <button class="btn-primary cfg" id="preset0" onclick="selectPreset(0, this)">Preset 1</button>
-                <button class="btn-primary cfg" id="preset1" onclick="selectPreset(1, this)">Preset 2</button>
-                <button class="btn-primary cfg" id="preset2" onclick="selectPreset(2, this)">Preset 3</button>
+            <div id="presetList"></div>
+            <div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+                <input type="text" id="newPresetName" class="cfg" placeholder="New preset name" style="flex:1;min-width:160px;">
+                <button class="btn-primary cfg" onclick="savePresetAsNew(this)">Save as New</button>
+                <button class="btn-primary cfg" onclick="updateCurrentPreset(this)">Update Current</button>
             </div>
         </div>
 
@@ -569,14 +571,18 @@ R"HTML(
             <div class="btn-row"><button class="btn-primary cfg" onclick="applySafety(this)">Apply Limits</button></div>
         </div>
 
-        <!-- Eco -->
+        <!-- Eco / Sleep -->
         <div class="card">
-            <div class="card-title">Eco</div>
+            <div class="card-title">Eco &amp; Sleep</div>
             <div class="control-grid-3">
                 <div class="control-group"><label for="ecoTarget">Eco target (&deg;C)</label><input type="number" id="ecoTarget" step="0.5" class="cfg"></div>
                 <div class="control-group"><label for="ecoTimeout">Eco timeout (min)</label><input type="number" id="ecoTimeout" step="1" class="cfg"></div>
-                <div class="control-group"><label>&nbsp;</label><button class="btn-primary cfg" onclick="applyEco(this)">Apply</button></div>
+                <div class="control-group"><label for="sleepTimeout">Sleep timeout (min)</label><input type="number" id="sleepTimeout" step="1" class="cfg"></div>
             </div>
+            <div style="margin-top:10px;font-size:0.82em;color:rgba(182,146,110,0.5);">
+                Sleep timeout counts from the same idle clock as Eco, must be &ge; Eco timeout - heater goes fully off in Sleep (deeper standby, slower to recover).
+            </div>
+            <div class="btn-row"><button class="btn-primary cfg" onclick="applyEco(this)">Apply</button></div>
         </div>
 
         <!-- Brew Timing (active preset) -->
@@ -659,6 +665,7 @@ R"HTML(
             <div class="card-title">System</div>
             <div class="btn-row" style="margin-top:0">
                 <button class="btn-emergency cfg" id="muteBtn" onclick="toggleMute()">Mute</button>
+                <button class="btn-primary cfg" id="encInvBtn" onclick="toggleEncoderInvert()">Invert Rotary</button>
                 <button class="btn-reset cfg" onclick="resetAll()">Reset All Settings</button>
             </div>
         </div>
@@ -766,13 +773,78 @@ R"JS(
 #endif
 R"JS(
     $('ecoTarget').value = s.ecoTarget; $('ecoTimeout').value = Math.round(s.ecoTimeoutMs / 60000);
+    $('sleepTimeout').value = Math.round(s.sleepTimeoutMs / 60000);
     $('coffeeTargetQuick').value = s.coffeeTarget;
     $('preinfuse').value = (s.preinfuseMs / 1000).toFixed(1); $('preinfuseBar').value = s.preinfuseBar;
     $('bloom').value = (s.bloomMs / 1000).toFixed(1); $('preheat').value = (s.preheatMs / 1000).toFixed(1);
     $('brewMax').value = (s.brewMaxMs / 1000).toFixed(1); $('shot').value = Math.round(s.shotMs / 1000);
-    for (let i = 0; i < 3; i++) $('preset' + i).classList.toggle('active', i === s.activePreset);
     $('wifiSsid').value = s.wifiSsid;   // password field intentionally left blank - never echoed back
     updateMuteBtn(s.buzzerMute);
+    updateEncInvBtn(s.encoderInverted);
+}
+
+// ---- Presets ----
+// Numbered by rank (0-based position among active presets), never a raw
+// storage slot - matches the 7-seg menu's PRESET view exactly (see
+// Settings.h PRESET MODEL note). Rebuilt from scratch on every load; simplest
+// correct approach for a list that can grow/shrink/rename at any time.
+async function loadPresets() {
+    const d = await (await fetch('/api/presets')).json();
+    const list = $('presetList');
+    list.innerHTML = '';
+    d.presets.forEach(p => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px;';
+        const active = p.rank === d.activeRank;
+        row.innerHTML =
+            '<button class="btn-primary cfg' + (active ? ' active' : '') + '" style="flex:1;text-align:left;" ' +
+                'onclick="selectPresetRank(' + p.rank + ', this)">' + p.name + '</button>' +
+            '<button class="btn-primary cfg" onclick="renamePresetRank(' + p.rank + ')">Rename</button>' +
+            '<button class="btn-reset cfg" onclick="deletePresetRank(' + p.rank + ')">Delete</button>';
+        list.appendChild(row);
+    });
+}
+
+async function selectPresetRank(rank, btn) {
+    const r = await fetch('/api/preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rank }) });
+    if (r.status === 409) { alert('Machine busy — settings are read-only until IDLE'); return; }
+    flash(btn);
+    loadPresets();
+    loadSettings();
+}
+
+async function savePresetAsNew(btn) {
+    const name = $('newPresetName').value.trim();
+    if (!name) { alert('Enter a name for the new preset first'); return; }
+    const r = await fetch('/api/preset/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+    if (r.status === 409) { alert('Machine busy, or the preset limit (20) is reached'); return; }
+    $('newPresetName').value = '';
+    flash(btn);
+    loadPresets();
+    loadSettings();
+}
+
+async function updateCurrentPreset(btn) {
+    const r = await fetch('/api/preset/update', { method: 'POST' });
+    if (r.status === 409) { alert('Machine busy — settings are read-only until IDLE'); return; }
+    flash(btn);
+    loadPresets();
+}
+
+async function deletePresetRank(rank) {
+    if (!confirm('Delete this preset?')) return;
+    const r = await fetch('/api/preset/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rank }) });
+    if (r.status === 409) { alert("Machine busy, or this is the last remaining preset — can't delete it"); return; }
+    loadPresets();
+    loadSettings();
+}
+
+async function renamePresetRank(rank) {
+    const name = prompt('New name for this preset:');
+    if (!name) return;
+    const r = await fetch('/api/preset/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rank, name }) });
+    if (r.status === 409) { alert('Machine busy — settings are read-only until IDLE'); return; }
+    loadPresets();
 }
 
 function flash(btn) {
@@ -806,18 +878,13 @@ function applySafety(btn) { post({ coffeeTempMax: +$('coffeeTempMax').value, ste
 )JS"
 #endif
 R"JS(
-function applyEco(btn) { post({ ecoTarget: +$('ecoTarget').value, ecoTimeoutMs: Math.round($('ecoTimeout').value * 60000) }, btn); }
+function applyEco(btn) { post({ ecoTarget: +$('ecoTarget').value, ecoTimeoutMs: Math.round($('ecoTimeout').value * 60000),
+                                 sleepTimeoutMs: Math.round($('sleepTimeout').value * 60000) }, btn); }
 function applyTiming(btn) {
     post({ preinfuseMs: Math.round($('preinfuse').value * 1000),
            preinfuseBar: +$('preinfuseBar').value, bloomMs: Math.round($('bloom').value * 1000),
            preheatMs: Math.round($('preheat').value * 1000), brewMaxMs: Math.round($('brewMax').value * 1000),
            shotMs: Math.round($('shot').value * 1000) }, btn);
-}
-async function selectPreset(i, btn) {
-    const r = await fetch('/api/preset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ index: i }) });
-    if (r.status === 409) { alert('Machine busy — settings are read-only until IDLE'); return; }
-    flash(btn);
-    loadSettings();
 }
 function updateMuteBtn(m) {
     const b = $('muteBtn');
@@ -825,11 +892,18 @@ function updateMuteBtn(m) {
     else   { b.classList.remove('forced-off'); b.textContent = 'Mute'; }
 }
 function toggleMute() { post({ buzzerMute: !$('muteBtn').classList.contains('forced-off') }); }
+function updateEncInvBtn(inv) {
+    const b = $('encInvBtn');
+    if (inv) { b.classList.add('forced-off'); b.textContent = 'Invert Rotary [ON]'; }
+    else     { b.classList.remove('forced-off'); b.textContent = 'Invert Rotary'; }
+}
+function toggleEncoderInvert() { post({ encoderInverted: !$('encInvBtn').classList.contains('forced-off') }); }
 async function resetAll() {
     if (!confirm('Reset all settings to defaults?')) return;
     const r = await fetch('/api/reset', { method: 'POST' });
     if (r.status === 409) { alert('Machine busy — settings are read-only until IDLE'); return; }
     loadSettings();
+    loadPresets();
 }
 
 // Not routed through post()/applySettings - separate NVS namespace, and not
@@ -881,24 +955,28 @@ function updateMachineStatus(ms, cs, tooHot) {
     else if (ms === 'STEAM') { el.textContent = 'Steam'; el.className = 'status-display steam'; }
     else if (ms === 'HOT_WATER') { el.textContent = 'Hot Water'; el.className = 'status-display hotwater'; }
     else if (ms === 'ECO') { el.textContent = 'Eco'; el.className = 'status-display eco'; }
+    else if (ms === 'SLEEP') { el.textContent = 'Sleep'; el.className = 'status-display sleep'; }
     else if (tooHot) { el.textContent = 'Too Hot'; el.className = 'status-display heating'; }
     else { el.textContent = 'Heating Up'; el.className = 'status-display heating'; }
 }
 
-function updateBrewStatus(ms, cs, err, tooHot, brewReadyTemp) {
+function updateBrewStatus(ms, cs, err, tooHot, brewReadyTemp, phaseRemainSec, phaseElapsedSec) {
     const label = $('brewStatusLabel'); if (!label) return;
+    // Countdown/count-up numbers match the 7-seg exactly (both read the same
+    // server-computed coffeePhaseRemainingSec/ElapsedSec - see handleState()).
     const labels = {
-        'PREINFUSE': 'Pump on — building pressure through puck',
-        'BLOOM':     'Pump off — soaking puck, valve holds pressure',
-        'PREHEAT':   'Full heat burst — recovering block temperature',
-        'BREW_MAX':  'Full heat + pump — countering temperature dip',
-        'BREW_PID':  'Brew PID active — maintaining extraction temperature',
-        'DONE':      'Shot complete — release coffee switch to return to idle',
+        'PREINFUSE': 'Pump on — building pressure through puck (' + phaseRemainSec + 's remaining)',
+        'BLOOM':     'Pump off — soaking puck, valve holds pressure (' + phaseRemainSec + 's remaining)',
+        'PREHEAT':   'Full heat burst — recovering block temperature (' + phaseRemainSec + 's remaining)',
+        'BREW_MAX':  'Full heat + pump — countering temperature dip (' + phaseRemainSec + 's remaining)',
+        'BREW_PID':  'Brew PID active — maintaining extraction temperature (' + phaseElapsedSec + 's since boost)',
+        'DONE':      'Shot complete — release coffee switch to return to idle (' + phaseElapsedSec + 's since boost)',
     };
     if (ms === 'COFFEE' && labels[cs]) label.textContent = labels[cs];
     else if (ms === 'STEAM') label.textContent = 'Steam mode — heating block to steam target';
     else if (ms === 'HOT_WATER') label.textContent = 'Pump on — flowing through thermoblock, heater off';
     else if (ms === 'ECO') label.textContent = 'Eco mode — cooled to save energy, press or turn the dial to wake';
+    else if (ms === 'SLEEP') label.textContent = 'Sleep — heater fully off, press or turn the dial to wake';
     else if (ms === 'ERROR') label.textContent = err
         ? '⚠ ' + err + ' — turn both switches off to acknowledge'
         : 'Safety lockout — turn both switches off to acknowledge';
@@ -953,7 +1031,8 @@ R"JS(
 R"JS(
         const tooHot = d.machineState === 'IDLE' && d.swCoffee && d.currentTemp > d.brewReadyTemp;
         updateMachineStatus(d.machineState, d.coffeeSubstate, tooHot);
-        updateBrewStatus(d.machineState, d.coffeeSubstate, d.errorReason, tooHot, d.brewReadyTemp);
+        updateBrewStatus(d.machineState, d.coffeeSubstate, d.errorReason, tooHot, d.brewReadyTemp,
+                          d.coffeePhaseRemainingSec, d.coffeePhaseElapsedSec);
         updateBars(d.dutyCycle, d.heaterMode);
         updateDiag(d);
 )JS"
@@ -974,6 +1053,7 @@ R"JS(
 }
 
 loadSettings();
+loadPresets();
 poll();
 setInterval(poll, 1000);
 )JS";
@@ -1012,6 +1092,7 @@ static const char* machineEnumText(MachineState s) {
     switch (s) { case STATE_COFFEE: return "COFFEE"; case STATE_STEAM: return "STEAM";
                  case STATE_HOT_WATER: return "HOT_WATER";
                  case STATE_ECO: return "ECO";
+                 case STATE_SLEEP: return "SLEEP";
                  case STATE_ERROR: return "ERROR"; default: return "IDLE"; }
 }
 static const char* substateEnumText(CoffeeSubstate s) {
@@ -1053,23 +1134,44 @@ static void handleState() {
     j += ",\"errorReason\":\""     + String(errorReasonText(s.errorReason)) + "\"";
     j += ",\"heaterMode\":\""       + String(heaterModeText(s.heaterMode)) + "\"";
     j += ",\"brewReadyTemp\":"      + String(BREW_READY_TEMP, 1);
+
+    // Coffee brew-phase countdown/count-up, computed server-side from the
+    // same coffeePhaseElapsedMs the 7-seg reads, so both UIs always agree -
+    // see BrewStateMachine.cpp / Display.cpp for the on-device counterpart.
+    if (s.machineState == STATE_COFFEE) {
+        Preset ap = activePreset();
+        uint32_t durMs = 0;
+        switch (s.coffeeSubstate) {
+            case SUB_PREINFUSE: durMs = ap.preinfuseMaxMs; break;
+            case SUB_BLOOM:     durMs = ap.bloomMs;         break;
+            case SUB_PREHEAT:   durMs = ap.preheatMs;       break;
+            case SUB_BREW_MAX:  durMs = ap.brewMaxMs;       break;
+            default: break;   // BREW_PID / DONE: no fixed duration, count up instead
+        }
+        uint32_t remainSec = (durMs > s.coffeePhaseElapsedMs) ? (durMs - s.coffeePhaseElapsedMs) / 1000 : 0;
+        j += ",\"coffeePhaseRemainingSec\":" + String(remainSec);
+        j += ",\"coffeePhaseElapsedSec\":"   + String(s.coffeePhaseElapsedMs / 1000);
+    }
     j += "}";
     server.send(200, "application/json", j);
 }
 
 static void handleGetSettings() {
     Settings s = settingsSnapshot();
-    const Preset& p = s.preset[s.activePresetIndex];
+    Preset p = activePreset();   // WORKING copy - reflects live unsaved edits, see Settings.h
     String j = "{";
     j += "\"heatingKp\":" + String(s.heatingKp, 2) + ",\"heatingKi\":" + String(s.heatingKi, 3) + ",\"heatingKd\":" + String(s.heatingKd, 1);
     j += ",\"brewKp\":" + String(s.brewKp, 2) + ",\"brewKi\":" + String(s.brewKi, 3) + ",\"brewKd\":" + String(s.brewKd, 1);
     j += ",\"buzzerMute\":" + String(s.buzzerMute ? "true" : "false");
+    j += ",\"encoderInverted\":" + String(s.encoderInverted ? "true" : "false");
     j += ",\"coffeeTempMax\":" + String(s.coffeeTempMax, 0) + ",\"steamTempMax\":" + String(s.steamTempMax, 0);
 #if HAS_PRESSURE_SENSOR
     j += ",\"safePressureMax\":" + String(s.safePressureMax, 1);
 #endif
     j += ",\"ecoTarget\":" + String(s.ecoTargetTemp, 1) + ",\"ecoTimeoutMs\":" + String(s.ecoTimeoutMs);
-    j += ",\"activePreset\":" + String(s.activePresetIndex);
+    j += ",\"sleepTimeoutMs\":" + String(s.sleepTimeoutMs);
+    int8_t activeRank = presetRankForSlot(s.activePresetIndex);
+    j += ",\"activePresetRank\":" + String(activeRank >= 0 ? activeRank : 0);
     j += ",\"coffeeTarget\":" + String(p.coffeeTargetTemp, 1) + ",\"steamTarget\":" + String(p.steamTargetTemp, 1);
     j += ",\"preinfuseMs\":" + String(p.preinfuseMaxMs) + ",\"bloomMs\":" + String(p.bloomMs);
     j += ",\"preheatMs\":" + String(p.preheatMs) + ",\"brewMaxMs\":" + String(p.brewMaxMs);
@@ -1085,6 +1187,8 @@ static void handlePostSettings() {
     if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
     String b = server.arg("plain");
 
+    // Global fields - persist immediately via settingsApply(), unaffected by
+    // the preset staging model (see Settings.h).
     Settings s = settingsSnapshot();
     s.heatingKp = jget(b, "heatingKp", s.heatingKp);
     s.heatingKi = jget(b, "heatingKi", s.heatingKi);
@@ -1099,9 +1203,14 @@ static void handlePostSettings() {
 #endif
     s.ecoTargetTemp   = jget(b, "ecoTarget", s.ecoTargetTemp);
     s.ecoTimeoutMs    = (uint32_t)jget(b, "ecoTimeoutMs", s.ecoTimeoutMs);
+    s.sleepTimeoutMs  = (uint32_t)jget(b, "sleepTimeoutMs", s.sleepTimeoutMs);
     s.buzzerMute      = jgetb(b, "buzzerMute", s.buzzerMute);
+    s.encoderInverted = jgetb(b, "encoderInverted", s.encoderInverted);
+    settingsApply(s);
 
-    Preset& p = s.preset[s.activePresetIndex];
+    // Preset-scoped fields - stage into the WORKING copy only, no persist
+    // (matches the 7-seg menu's behavior - see Settings.h LIVE-EDIT MODEL).
+    Preset p = activePreset();
     p.coffeeTargetTemp   = jget(b, "coffeeTarget", p.coffeeTargetTemp);
     p.steamTargetTemp    = jget(b, "steamTarget", p.steamTargetTemp);
     p.preinfuseMaxMs     = (uint32_t)jget(b, "preinfuseMs", p.preinfuseMaxMs);
@@ -1110,16 +1219,70 @@ static void handlePostSettings() {
     p.brewMaxMs          = (uint32_t)jget(b, "brewMaxMs", p.brewMaxMs);
     p.shotMs             = (uint32_t)jget(b, "shotMs", p.shotMs);
     p.preinfuseTargetBar = jget(b, "preinfuseBar", p.preinfuseTargetBar);
+    settingsStageWorkingPreset(p);
 
-    settingsApply(s);   // clamps + persists
     server.send(200, "text/plain", "ok");
+}
+
+// Preset list for the dashboard's dynamic preset card - only active slots,
+// numbered by rank (see Settings.h PRESET MODEL), never raw slot index.
+static void handleGetPresets() {
+    Settings s = settingsSnapshot();
+    int8_t activeRank = presetRankForSlot(s.activePresetIndex);
+    String j = "{\"activeRank\":" + String(activeRank >= 0 ? activeRank : 0) + ",\"presets\":[";
+    uint8_t count = presetRankCount();
+    for (uint8_t r = 0; r < count; r++) {
+        uint8_t slot = presetSlotForRank(r);
+        if (r > 0) j += ",";
+        j += "{\"rank\":" + String(r) + ",\"name\":\"" + String(s.preset[slot].name) + "\"}";
+    }
+    j += "]}";
+    server.send(200, "application/json", j);
 }
 
 static void handlePostPreset() {
     if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
     String b = server.arg("plain");
-    int idx = (int)jget(b, "index", 0);
-    settingsSetActivePreset((uint8_t)idx);
+    uint8_t rank = (uint8_t)jget(b, "rank", 0);
+    settingsSelectPresetBySlot(presetSlotForRank(rank));
+    server.send(200, "text/plain", "ok");
+}
+
+static void handlePostPresetSave() {
+    if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
+    String b = server.arg("plain");
+    String name = jgetStr(b, "name");
+    if (name.length() == 0) { server.send(400, "text/plain", "name required"); return; }
+    uint8_t before = presetRankCount();
+    settingsSaveWorkingAsNewPreset(name.c_str());
+    if (presetRankCount() == before) { server.send(409, "text/plain", "preset limit reached"); return; }
+    server.send(200, "text/plain", "ok");
+}
+
+static void handlePostPresetUpdate() {
+    if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
+    uint8_t activeSlot = settingsSnapshot().activePresetIndex;
+    settingsUpdateSlotFromWorking(activeSlot);
+    server.send(200, "text/plain", "ok");
+}
+
+static void handlePostPresetDelete() {
+    if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
+    String b = server.arg("plain");
+    uint8_t rank = (uint8_t)jget(b, "rank", 0);
+    uint8_t slot = presetSlotForRank(rank);
+    if (presetRankCount() <= 1) { server.send(409, "text/plain", "can't delete the last preset"); return; }
+    settingsDeletePreset(slot);
+    server.send(200, "text/plain", "ok");
+}
+
+static void handlePostPresetRename() {
+    if (!idleNow()) { server.send(409, "text/plain", "busy"); return; }
+    String b = server.arg("plain");
+    uint8_t rank = (uint8_t)jget(b, "rank", 0);
+    String name = jgetStr(b, "name");
+    if (name.length() == 0) { server.send(400, "text/plain", "name required"); return; }
+    settingsRenamePreset(presetSlotForRank(rank), name.c_str());
     server.send(200, "text/plain", "ok");
 }
 
@@ -1200,7 +1363,12 @@ static void setupWeb() {
     server.on("/api/state",   HTTP_GET,  handleState);
     server.on("/api/settings", HTTP_GET, handleGetSettings);
     server.on("/api/settings", HTTP_POST, handlePostSettings);
+    server.on("/api/presets", HTTP_GET,  handleGetPresets);
     server.on("/api/preset",  HTTP_POST, handlePostPreset);
+    server.on("/api/preset/save",   HTTP_POST, handlePostPresetSave);
+    server.on("/api/preset/update", HTTP_POST, handlePostPresetUpdate);
+    server.on("/api/preset/delete", HTTP_POST, handlePostPresetDelete);
+    server.on("/api/preset/rename", HTTP_POST, handlePostPresetRename);
     server.on("/api/reset",   HTTP_POST, handlePostReset);
     server.on("/api/wifi",    HTTP_POST, handlePostWifi);
 #if SIMULATION_MODE

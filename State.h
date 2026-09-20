@@ -11,16 +11,16 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
-enum MachineState   { STATE_IDLE, STATE_COFFEE, STATE_STEAM, STATE_HOT_WATER, STATE_ECO, STATE_ERROR };
+enum MachineState   { STATE_IDLE, STATE_COFFEE, STATE_STEAM, STATE_HOT_WATER, STATE_ECO, STATE_SLEEP, STATE_ERROR };
 
 enum CoffeeSubstate { SUB_NONE, SUB_PREINFUSE, SUB_BLOOM, SUB_PREHEAT,
                       SUB_BREW_MAX, SUB_BREW_PID, SUB_DONE };
 
 enum HeaterMode     { HEATER_OFF, HEATER_FULL_ON, HEATER_PID };
 
-enum DisplayView    { VIEW_TEMP, VIEW_SET_COFFEE, VIEW_TIMER,
-                      VIEW_PRESET, VIEW_IP };
-#define DISPLAY_VIEW_COUNT 5
+enum DisplayView    { VIEW_TEMP, VIEW_SET_COFFEE, VIEW_PREINFUSE, VIEW_BLOOM,
+                      VIEW_PREHEAT, VIEW_BOOST, VIEW_PRESET, VIEW_IP };
+#define DISPLAY_VIEW_COUNT 8
 
 enum ErrorReason    { ERR_NONE, ERR_OVER_TEMP,
                       ERR_OVER_PRESSURE, ERR_TEMP_SENSOR };
@@ -48,13 +48,21 @@ struct SystemState {
     bool           pumpState;
     bool           valveState;
     uint32_t       brewTimerElapsedMs;
+    uint32_t       coffeePhaseElapsedMs;  // time in the current coffee substate;
+                                           // BREW_PID/DONE hold "since boost
+                                           // started" instead of resetting -
+                                           // see BrewStateMachine.cpp
     ErrorReason    errorReason;
 
     // --- UI (writer: input process) ---
     DisplayView    displayView;
-    bool           setEditDecimals;   // SET_COFFEE: edit tenths (true) vs whole degrees (false)
-    bool           ecoWakeRequested;  // set on any encoder/button edge while in ECO;
+    bool           wakeRequested;    // set on any encoder/button edge while in ECO/SLEEP;
                                       // consumed + cleared by the brew SM
+    bool           presetSaveMode;      // VIEW_PRESET long-press: the blinking
+                                         // "OR.." override/save screen is active
+    uint8_t        presetSaveTargetRank; // which rank is highlighted while in
+                                         // presetSaveMode; == presetRankCount()
+                                         // (one past the last) means "new"
 };
 
 extern SystemState state;

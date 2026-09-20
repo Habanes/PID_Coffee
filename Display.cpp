@@ -24,8 +24,11 @@ static const byte CHAR_H = 0b01110110;
 static const byte CHAR_I = 0b00000110;   // identical glyph to '1' on 7-seg
 static const byte CHAR_G = 0b00111101;
 static const byte CHAR_n = 0b01010100;
-static const byte CHAR_DASH = 0b01000000;
-static const byte SEG_DP = 0b10000000;
+static const byte CHAR_b = 0b01111100;   // lowercase b
+static const byte CHAR_h = 0b01110100;   // lowercase h
+static const byte CHAR_L = 0b00111000;   // uppercase L - segments d,e,f (distinct from '1', unlike old lowercase-l glyph)
+static const byte CHAR_DASH = 0b01000000;        // segment g only - also the left half of the "+" glyph pair below
+static const byte CHAR_PLUS_RIGHT = 0b01110000;  // segments e,f,g - paired with CHAR_DASH to draw a "+" across 2 digits
 
 // Maps a character to its glyph for the scrolling views (IP address, error
 // words). Digits, '.', and the specific letters those two use; anything else
@@ -70,22 +73,16 @@ void setupDisplay() {
     sevseg.setBrightness(DISPLAY_BRIGHTNESS);
 }
 
-// [lead][XX.X] below 100, [lead][XXX] at/above 100.
+// [lead][XXX], always whole degrees - no decimal, at any temperature. Needed
+// to read correctly during STEAM (>= 100C) as much as during IDLE/COFFEE.
 static void renderTemp(float temp, byte lead) {
+    int t = (int)temp;
+    if (t < 0) t = 0;
     byte s[4];
     s[0] = lead;
-    if (temp >= 100.0f) {
-        int t = (int)temp;
-        s[1] = digitSeg[(t / 100) % 10];
-        s[2] = digitSeg[(t / 10) % 10];
-        s[3] = digitSeg[t % 10];
-    } else {
-        int t = (int)(temp * 10.0f);
-        if (t < 0) t = 0;
-        s[1] = digitSeg[(t / 100) % 10];
-        s[2] = digitSeg[(t / 10) % 10] | 0b10000000;  // decimal point
-        s[3] = digitSeg[t % 10];
-    }
+    s[1] = digitSeg[(t / 100) % 10];
+    s[2] = digitSeg[(t / 10) % 10];
+    s[3] = digitSeg[t % 10];
     sevseg.setSegments(s);
 }
 
@@ -100,41 +97,97 @@ static void renderSeconds(uint32_t sec, byte lead) {
     sevseg.setSegments(s);
 }
 
-// SET_COFFEE: "S" + target, with the digit group being edited blinking.
-// editDecimals = true  -> the tenths digit blinks
-// editDecimals = false -> the whole-degree digits blink
-static void renderSetCoffee(float temp, bool editDecimals) {
-    static uint32_t last = 0; static bool on = true;
+// Shared blink phase for every "this value is editable" render below - one
+// timer so all of them blink in sync rather than each drifting on its own.
+static bool blinkOn() {
+    static uint32_t last = 0;
+    static bool on = true;
     if (millis() - last >= DISPLAY_BLINK_CYCLE_MS) { on = !on; last = millis(); }
+    return on;
+}
 
+// [c0][c1][seconds, 2 digits]. `blink` distinguishes the two callers: idle-
+// menu phase-timing views (editable - value blinks, same convention as
+// renderSetCoffee) from the brewing countdown (read-only - static). Real
+// ranges can exceed 99s (see Config.h) but every practical phase value is
+// well under it, so this saturates rather than widening.
+static void renderLabeledSeconds(byte c0, byte c1, uint32_t sec, bool blink) {
+    if (sec > 99) sec = 99;
     byte s[4];
-    s[0] = CHAR_S;
-    if (temp >= 100.0f) {
-        int t = (int)temp;
-        s[1] = digitSeg[(t / 100) % 10];
-        s[2] = digitSeg[(t / 10) % 10];
-        s[3] = digitSeg[t % 10];
-        if (!on && !editDecimals) { s[1] = s[2] = s[3] = CHAR_BLANK; }   // no tenths at >=100
+    s[0] = c0;
+    s[1] = c1;
+    if (!blink || blinkOn()) {
+        s[2] = digitSeg[(sec / 10) % 10];
+        s[3] = digitSeg[sec % 10];
     } else {
-        int t = (int)(temp * 10.0f);
-        if (t < 0) t = 0;
-        s[1] = digitSeg[(t / 100) % 10];
-        s[2] = digitSeg[(t / 10) % 10] | SEG_DP;   // decimal point on ones digit
-        s[3] = digitSeg[t % 10];
-        if (!on) {
-            if (editDecimals) {
-                s[3] = CHAR_BLANK;          // blink the tenths
-            } else {
-                s[1] = CHAR_BLANK;          // blink the whole degrees (keep the dot)
-                s[2] = SEG_DP;
-            }
-        }
+        s[2] = s[3] = CHAR_BLANK;
     }
     sevseg.setSegments(s);
 }
 
-static void renderPreset(uint8_t index) {
-    byte s[4] = { CHAR_P, CHAR_BLANK, CHAR_BLANK, digitSeg[(index + 1) % 10] };
+// Seconds remaining in a phase given its configured duration and how long
+// it's been running - floors at 0 rather than wrapping negative.
+static uint32_t remainingSec(uint32_t durationMs, uint32_t elapsedMs) {
+    uint32_t durSec = durationMs / 1000;
+    uint32_t elSec  = elapsedMs  / 1000;
+    return (elSec < durSec) ? (durSec - elSec) : 0;
+}
+
+// SET_COFFEE: "S" + target, whole degrees only, value blinks as a group.
+static void renderSetCoffee(float temp) {
+    int t = (int)temp;
+    if (t < 0) t = 0;
+    byte s[4];
+    s[0] = CHAR_S;
+    if (blinkOn()) {
+        s[1] = digitSeg[(t / 100) % 10];
+        s[2] = digitSeg[(t / 10) % 10];
+        s[3] = digitSeg[t % 10];
+    } else {
+        s[1] = s[2] = s[3] = CHAR_BLANK;
+    }
+    sevseg.setSegments(s);
+}
+
+// "P" + blank + 2-digit rank+1 (up to MAX_PRESETS=20, so a single digit isn't
+// enough any more). `rank` is the 0-based position among active presets, not
+// a raw slot index - see Settings.h's PRESET MODEL note. Value blinks - same
+// "this is editable via the rotary" convention as renderSetCoffee.
+static void renderPreset(uint8_t rank) {
+    uint8_t num = rank + 1;
+    byte s[4];
+    s[0] = CHAR_P;
+    s[1] = CHAR_BLANK;
+    if (blinkOn()) {
+        s[2] = digitSeg[(num / 10) % 10];
+        s[3] = digitSeg[num % 10];
+    } else {
+        s[2] = s[3] = CHAR_BLANK;
+    }
+    sevseg.setSegments(s);
+}
+
+// Blinking "Or" + target: either a 2-digit preset number (rank+1, "Or00"-style)
+// or, for the virtual "new" slot one past the last active rank, a hand-built
+// "+" drawn across the last 2 digits - CHAR_DASH (segment g only) on digit 2
+// forms the left half of the crossbar, CHAR_PLUS_RIGHT (segments e,f,g) on
+// digit 3 forms the vertical stroke plus the right half of the crossbar, so
+// together they read as a single "+" spanning both cells. Whole value blinks
+// as a group, same precedent as renderSetCoffee.
+static void renderPresetSave(uint8_t targetRank, uint8_t rankCount) {
+    byte s[4];
+    if (blinkOn()) {
+        s[0] = digitSeg[0];   // 'O' - same glyph as digit 0, precedent: renderEco()
+        s[1] = CHAR_r;
+        if (targetRank >= rankCount) {
+            s[2] = CHAR_DASH; s[3] = CHAR_PLUS_RIGHT;
+        } else {
+            uint8_t num = targetRank + 1;
+            s[2] = digitSeg[(num / 10) % 10]; s[3] = digitSeg[num % 10];
+        }
+    } else {
+        s[0] = s[1] = s[2] = s[3] = CHAR_BLANK;
+    }
     sevseg.setSegments(s);
 }
 
@@ -165,15 +218,17 @@ static void renderEco() {
     sevseg.setSegments(s);
 }
 
-// Blinking "HOT" - coffee switch active but block too hot to start a brew.
-// Reuses renderSetCoffee's on/off blink-timer pattern.
-static void renderHot() {
-    static uint32_t last = 0; static bool on = true;
-    if (millis() - last >= DISPLAY_BLINK_CYCLE_MS) { on = !on; last = millis(); }
+// Static "SLEP" - same non-blinking precedent as ECO, deeper standby tier.
+static void renderSleep() {
+    byte s[4] = { CHAR_S, CHAR_L, CHAR_E, CHAR_P };
+    sevseg.setSegments(s);
+}
 
+// Blinking "HOT" - coffee switch active but block too hot to start a brew.
+static void renderHot() {
     byte s[4];
-    if (on) { s[0] = CHAR_H; s[1] = digitSeg[0]; s[2] = CHAR_t; s[3] = CHAR_BLANK; }
-    else    { s[0] = s[1] = s[2] = s[3] = CHAR_BLANK; }
+    if (blinkOn()) { s[0] = CHAR_H; s[1] = digitSeg[0]; s[2] = CHAR_t; s[3] = CHAR_BLANK; }
+    else           { s[0] = s[1] = s[2] = s[3] = CHAR_BLANK; }
     sevseg.setSegments(s);
 }
 
@@ -204,9 +259,23 @@ void refreshDisplay() {
     SystemState s = stateSnapshot();
 
     switch (s.machineState) {
-        case STATE_COFFEE:
-            renderSeconds(s.brewTimerElapsedMs / 1000, CHAR_BLANK);   // elapsed shot time
+        case STATE_COFFEE: {
+            // Countdown per phase (preinfuse/bloom/preheat/boost); once boost
+            // ends, switches to counting UP continuously (coffeePhaseElapsedMs
+            // holds "since boost started" for BREW_PID/DONE - see
+            // BrewStateMachine.cpp) - plain seconds, no label, since it's no
+            // longer a fixed-duration phase.
+            Preset p = activePreset();
+            uint32_t el = s.coffeePhaseElapsedMs;
+            switch (s.coffeeSubstate) {
+                case SUB_PREINFUSE: renderLabeledSeconds(CHAR_P, CHAR_r, remainingSec(p.preinfuseMaxMs, el), false); break;
+                case SUB_BLOOM:     renderLabeledSeconds(CHAR_b, CHAR_L, remainingSec(p.bloomMs,        el), false); break;
+                case SUB_PREHEAT:   renderLabeledSeconds(CHAR_P, CHAR_h, remainingSec(p.preheatMs,      el), false); break;
+                case SUB_BREW_MAX:  renderLabeledSeconds(CHAR_b, CHAR_S, remainingSec(p.brewMaxMs,      el), false); break;
+                default:            renderSeconds(el / 1000, CHAR_BLANK); break;   // BREW_PID/DONE: count up
+            }
             return;
+        }
         case STATE_STEAM:
             renderTemp(s.currentTemperature, CHAR_DASH);              // hot block temp
             return;
@@ -216,10 +285,21 @@ void refreshDisplay() {
         case STATE_ECO:
             renderEco();
             return;
+        case STATE_SLEEP:
+            renderSleep();
+            return;
         case STATE_ERROR:
             renderErrorScroll(s.errorReason);
             return;
         default: break;   // IDLE -> menu views below
+    }
+
+    // IDLE: the preset override/save screen (long-press from VIEW_PRESET,
+    // see Input.cpp) takes priority - the user is mid-gesture, don't yank
+    // the screen away from under them even if the too-hot condition fires.
+    if (s.presetSaveMode) {
+        renderPresetSave(s.presetSaveTargetRank, presetRankCount());
+        return;
     }
 
     // IDLE: coffee switch pressed but block too hot to start a brew - override
@@ -229,14 +309,22 @@ void refreshDisplay() {
         return;
     }
 
-    // IDLE: show the selected view.
-    Settings cfg = settingsSnapshot();
-    const Preset& p = cfg.preset[cfg.activePresetIndex];
+    // IDLE: show the selected view. Reads the WORKING copy (activePreset()),
+    // not the stored slot directly, so live unsaved edits show immediately -
+    // see Settings.h's LIVE-EDIT MODEL note.
+    Preset p = activePreset();
     switch (s.displayView) {
-        case VIEW_TEMP:       renderTemp(s.currentTemperature, CHAR_C);          break;
-        case VIEW_SET_COFFEE: renderSetCoffee(p.coffeeTargetTemp, s.setEditDecimals); break;
-        case VIEW_TIMER:      renderSeconds(p.shotMs / 1000, CHAR_t);            break;
-        case VIEW_PRESET:     renderPreset(cfg.activePresetIndex);          break;
-        case VIEW_IP:         renderIpScroll();                            break;
+        case VIEW_TEMP:       renderTemp(s.currentTemperature, CHAR_C);                       break;
+        case VIEW_SET_COFFEE: renderSetCoffee(p.coffeeTargetTemp);                            break;
+        case VIEW_PREINFUSE:  renderLabeledSeconds(CHAR_P, CHAR_r, p.preinfuseMaxMs / 1000, true);   break;
+        case VIEW_BLOOM:      renderLabeledSeconds(CHAR_b, CHAR_L, p.bloomMs / 1000,        true);   break;
+        case VIEW_PREHEAT:    renderLabeledSeconds(CHAR_P, CHAR_h, p.preheatMs / 1000,      true);   break;
+        case VIEW_BOOST:      renderLabeledSeconds(CHAR_b, CHAR_S, p.brewMaxMs / 1000,      true);   break;
+        case VIEW_PRESET: {
+            int8_t rank = presetActiveRank();
+            renderPreset((rank >= 0) ? (uint8_t)rank : 0);
+            break;
+        }
+        case VIEW_IP:         renderIpScroll();                                                break;
     }
 }

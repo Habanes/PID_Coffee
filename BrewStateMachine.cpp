@@ -8,7 +8,12 @@
 // Timers (single task = ControlTask, so plain statics are safe).
 static uint32_t brewStartMs     = 0;   // COFFEE entry - drives the shot timer
 static uint32_t substateEntryMs = 0;   // current coffee substate entry
-static uint32_t idleEntryMs     = 0;   // last STATE_IDLE entry - drives the eco timeout
+static uint32_t idleEntryMs     = 0;   // last STATE_IDLE entry - drives the eco/sleep timeout
+static uint32_t boostStartMs    = 0;   // SUB_BREW_MAX entry - NOT reset on
+                                        // BREW_MAX->BREW_PID, so the display's
+                                        // count-up phase runs continuously
+static uint32_t doneFreezeMs    = 0;   // count-up value captured once at the
+                                        // instant SUB_DONE is entered
 static MachineState errorFromMode = STATE_IDLE;  // mode active when ERROR was
                                                   // entered - clear-check uses
                                                   // its temp limit, not steamTempMax
@@ -22,6 +27,9 @@ static void driveOutputs(MachineState ms, CoffeeSubstate cs,
         case STATE_IDLE:
         case STATE_ECO:                                    // same outputs as IDLE - only the PID target differs
             hm = HEATER_PID;  pump = false; valve = false; break;
+
+        case STATE_SLEEP:                                  // heater genuinely off - no PID hold at all
+            hm = HEATER_OFF;  pump = false; valve = false; break;
 
         case STATE_STEAM:                                  // bang-bang heater
             hm = (temp < p.steamTargetTemp - STEAM_HYSTERESIS) ? HEATER_FULL_ON
@@ -53,7 +61,8 @@ void setupBrew() {
     pinMode(PIN_VALVE, OUTPUT);
     digitalWrite(PIN_PUMP,  HIGH);   // active LOW -> HIGH = off
     digitalWrite(PIN_VALVE, HIGH);
-    brewStartMs = substateEntryMs = idleEntryMs = millis();
+    brewStartMs = substateEntryMs = idleEntryMs = boostStartMs = millis();
+    doneFreezeMs = 0;
 }
 
 void updateBrewStateMachine() {
@@ -64,7 +73,7 @@ void updateBrewStateMachine() {
     float temp      = state.currentTemperature;
     float pressure  = state.currentPressure;
     bool  tempFault = state.temperatureSensorError;
-    bool  ecoWakeRequested = state.ecoWakeRequested;
+    bool  wakeRequested = state.wakeRequested;
     MachineState   ms = state.machineState;
     CoffeeSubstate cs = state.coffeeSubstate;
     STATE_UNLOCK();
@@ -72,11 +81,12 @@ void updateBrewStateMachine() {
     Preset p = activePreset();
 
     SETTINGS_LOCK();
-    float coffeeTempMax   = settings.coffeeTempMax;
-    float steamTempMax    = settings.steamTempMax;
-    float safePressureMax = settings.safePressureMax;
-    float ecoTargetTemp   = settings.ecoTargetTemp;
-    uint32_t ecoTimeoutMs = settings.ecoTimeoutMs;
+    float coffeeTempMax     = settings.coffeeTempMax;
+    float steamTempMax      = settings.steamTempMax;
+    float safePressureMax   = settings.safePressureMax;
+    float ecoTargetTemp     = settings.ecoTargetTemp;
+    uint32_t ecoTimeoutMs   = settings.ecoTimeoutMs;
+    uint32_t sleepTimeoutMs = settings.sleepTimeoutMs;
     SETTINGS_UNLOCK();
 
     uint32_t now = millis();
@@ -122,7 +132,7 @@ void updateBrewStateMachine() {
                         newMs = STATE_STEAM;
                     } else if (swCoffee && temp <= BREW_READY_TEMP) {
                         newMs = STATE_COFFEE; newCs = SUB_PREINFUSE;
-                        brewStartMs = substateEntryMs = now;
+                        brewStartMs = substateEntryMs = boostStartMs = now;
                     } else if (!swCoffee && (now - idleEntryMs) >= ecoTimeoutMs) {
                         // Guarded on !swCoffee so eco doesn't kick in while the
                         // switch is actively held (e.g. blocked by the too-hot gate).
@@ -143,6 +153,7 @@ void updateBrewStateMachine() {
 
                     if (brewElapsed >= p.shotMs) {      // global shot timer wins
                         newCs = SUB_DONE;
+                        if (cs != SUB_DONE) doneFreezeMs = now - boostStartMs;   // freeze the count-up display
                     } else switch (cs) {
                         case SUB_PREINFUSE:
                             if (pressure >= p.preinfuseTargetBar || subElapsed >= p.preinfuseMaxMs)
@@ -152,7 +163,7 @@ void updateBrewStateMachine() {
                             if (subElapsed >= p.bloomMs)   { newCs = SUB_PREHEAT;  substateEntryMs = now; }
                             break;
                         case SUB_PREHEAT:
-                            if (subElapsed >= p.preheatMs) { newCs = SUB_BREW_MAX; substateEntryMs = now; }
+                            if (subElapsed >= p.preheatMs) { newCs = SUB_BREW_MAX; substateEntryMs = boostStartMs = now; }
                             break;
                         case SUB_BREW_MAX:
                             if (subElapsed >= p.brewMaxMs) { newCs = SUB_BREW_PID; substateEntryMs = now; }
@@ -169,7 +180,7 @@ void updateBrewStateMachine() {
                     else if (swSteam)               { newMs = STATE_STEAM; newCs = SUB_NONE; }
                     else if (swCoffee) {
                         newMs = STATE_COFFEE; newCs = SUB_PREINFUSE;
-                        brewStartMs = substateEntryMs = now;
+                        brewStartMs = substateEntryMs = boostStartMs = now;
                     }
                     break;
 
@@ -182,8 +193,25 @@ void updateBrewStateMachine() {
                     if (swSteam)                    { newMs = STATE_STEAM;     newCs = SUB_NONE; }
                     else if (swCoffee) {
                         newMs = STATE_COFFEE; newCs = SUB_PREINFUSE;
-                        brewStartMs = substateEntryMs = now;
-                    } else if (ecoWakeRequested) {
+                        brewStartMs = substateEntryMs = boostStartMs = now;
+                    } else if (wakeRequested) {
+                        newMs = STATE_IDLE;
+                    } else if ((now - idleEntryMs) >= sleepTimeoutMs) {
+                        // Second, deeper tier off the SAME idle clock that drove the
+                        // IDLE->ECO entry above - not reset on entering ECO.
+                        newMs = STATE_SLEEP;
+                    }
+                    break;
+
+                case STATE_SLEEP:
+                    // Same trust model as ECO's exit - switches go straight to the
+                    // matching mode, no gate; wake goes straight to IDLE, not back
+                    // through ECO first.
+                    if (swSteam)                    { newMs = STATE_STEAM;     newCs = SUB_NONE; }
+                    else if (swCoffee) {
+                        newMs = STATE_COFFEE; newCs = SUB_PREINFUSE;
+                        brewStartMs = substateEntryMs = boostStartMs = now;
+                    } else if (wakeRequested) {
                         newMs = STATE_IDLE;
                     }
                     break;
@@ -210,15 +238,16 @@ void updateBrewStateMachine() {
         }
     }
 
-    // Reset the eco-countdown clock on every fresh arrival into IDLE (COFFEE
-    // done, STEAM/HOT_WATER switch released, ERROR cleared, ECO woken) - NOT
-    // just on menu-browsing while already idle.
+    // Reset the eco/sleep-countdown clock on every fresh arrival into IDLE
+    // (COFFEE done, STEAM/HOT_WATER switch released, ERROR cleared, ECO/SLEEP
+    // woken) - NOT just on menu-browsing while already idle.
     if (newMs == STATE_IDLE && ms != STATE_IDLE) idleEntryMs = now;
 
     // --- outputs from the new state ---
     float target = (newMs == STATE_STEAM) ? p.steamTargetTemp
-                  : (newMs == STATE_ECO)  ? ecoTargetTemp
-                  :                         p.coffeeTargetTemp;
+                  : (newMs == STATE_ECO)   ? ecoTargetTemp
+                  : (newMs == STATE_SLEEP) ? 0.0f   // heater fully off - no target
+                  :                          p.coffeeTargetTemp;
     HeaterMode hm; bool pump, valve;
     driveOutputs(newMs, newCs, temp, p, hm, pump, valve);
 
@@ -226,6 +255,19 @@ void updateBrewStateMachine() {
     digitalWrite(PIN_VALVE, valve ? LOW : HIGH);
 
     uint32_t brewElapsed = (newMs == STATE_COFFEE) ? (now - brewStartMs) : 0;
+
+    // Display value for the current coffee substate: countdown source for
+    // PREINFUSE/BLOOM/PREHEAT/BREW_MAX (now - substateEntryMs, consumers
+    // subtract from that phase's own duration); continuous count-up "since
+    // boost started" for BREW_PID; frozen at whatever it was for DONE.
+    uint32_t phaseElapsed = 0;
+    if (newMs == STATE_COFFEE) {
+        switch (newCs) {
+            case SUB_BREW_PID: phaseElapsed = now - boostStartMs; break;
+            case SUB_DONE:      phaseElapsed = doneFreezeMs;       break;
+            default:            phaseElapsed = now - substateEntryMs; break;
+        }
+    }
 
     STATE_LOCK();
     state.machineState             = newMs;
@@ -235,20 +277,21 @@ void updateBrewStateMachine() {
     state.pumpState                = pump;
     state.valveState               = valve;
     state.brewTimerElapsedMs       = brewElapsed;
+    state.coffeePhaseElapsedMs     = phaseElapsed;
     if (newMs == STATE_ERROR && ms != STATE_ERROR)      state.errorReason = err;
     else if (newMs == STATE_IDLE && ms == STATE_ERROR)  state.errorReason = ERR_NONE;
-    if (ms == STATE_ECO) state.ecoWakeRequested = false;   // consumed this cycle
+    if (ms == STATE_ECO || ms == STATE_SLEEP) state.wakeRequested = false;   // consumed this cycle
     STATE_UNLOCK();
 
     // --- buzzer: mode enter / exit (error siren handled by the UI task) ---
-    // ECO is deliberately NOT in this active-mode set: auto-entry is silent
-    // (unattended, could fire overnight) and waking gets a plain click below,
-    // not the full mode jingle reserved for genuinely active modes.
+    // ECO/SLEEP are deliberately NOT in this active-mode set: auto-entry is
+    // silent (unattended, could fire overnight) and waking gets a plain click
+    // below, not the full mode jingle reserved for genuinely active modes.
     bool wasActive = (ms    == STATE_COFFEE || ms    == STATE_STEAM || ms    == STATE_HOT_WATER);
     bool nowActive = (newMs == STATE_COFFEE || newMs == STATE_STEAM || newMs == STATE_HOT_WATER);
     if (nowActive && !wasActive)      buzzerPlay(SND_MODE_ENTER);
     else if (!nowActive && wasActive && newMs == STATE_IDLE) buzzerPlay(SND_MODE_EXIT);
-    if (ms == STATE_ECO && newMs == STATE_IDLE) buzzerPlay(SND_CLICK);
+    if ((ms == STATE_ECO || ms == STATE_SLEEP) && newMs == STATE_IDLE) buzzerPlay(SND_CLICK);
 
     if (newMs != ms) {
         Serial.printf("[SM] %s -> %s\n", machineStateText(ms), machineStateText(newMs));
